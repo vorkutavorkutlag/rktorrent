@@ -1,18 +1,24 @@
-def handshake(info_hash: str, unique_id: str):
-    info_hash_bytes = bytes.fromhex(info_hash)
-    uid_bytes = unique_id.encode('utf-8')
+class Peer:
+    def __init__(self):
+        self.bitfield = None
+        self.peer_id = None
+        self.info_hash = None
 
-    pstr = b'BitTorrent protocol'
-    pstrlen = bytes([len(pstr)])
-    reserved = b'\x00\x00\x00\x00\x00\x00\x00\x00'
 
-    hs = (
-            pstrlen +
-            pstr +
-            reserved +
-            info_hash_bytes +
-            uid_bytes)
+    def create_handshake(self):
+        pstr = b'BitTorrent protocol'
+        pstrlen = len(pstr)
+        reserved = b'\x00' * 8
+        handshake = bytes([pstrlen]) + pstr + reserved + self.info_hash + self.peer_id
+        return handshake
 
-    print(hs)
+    pass
 
-handshake("12345678901234567890abcdefabcdef12345678", "-PC0001-123456789012")
+
+def find_rarest(peers: list[Peer], num_pieces: int):
+    piece_counts = [0] * num_pieces
+    for peer in peers:
+        for index, has_piece in enumerate(peer.bitfield):
+            if has_piece:
+                piece_counts[index] += 1
+    return piece_counts.index(min(piece_counts))
