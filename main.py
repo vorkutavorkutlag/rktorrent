@@ -57,33 +57,11 @@ def main():
     test_torrent: str = "C:\\Users\\mensc\\Downloads\\Atomic_Heart.torrent"
     announce_list, piece_length, info_hash, size = read_torrent(test_torrent)
 
-    while True:
-        # region TRACKER
-        tracker_response, tracker_used = \
-            tracker_handler.announce_to_peers(announce_list, info_hash, size, UNIQUE_CLIENT_ID, IP_ADDRESS)
-        # endregion
+    peers_dict, tracker_conn = \
+        tracker_handler.announce_to_peers(announce_list, info_hash, size, UNIQUE_CLIENT_ID, IP_ADDRESS)
 
-        # region DECODE RESPONSE
-
-        peer_dict: dict = {}
-        try:
-            peers = bdecode(tracker_response)
-            if type(peers['peers']) != list:
-                peer_dict = decode_str_peers(peers)
-
-            else:
-                for peer in peers:
-                    ip = peer['ip']
-                    port = peer['port']
-
-                    peer_dict[ip] = port
-            break
-
-        except (struct.error, TypeError, ValueError) as e:
-            announce_list.remove(tracker_used)
-        # endregion
-
-    pprint(peer_dict)
+    pprint(announce_list)
+    pprint(peers_dict)
 
 
 if __name__ == "__main__":
