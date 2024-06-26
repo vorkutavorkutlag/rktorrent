@@ -25,42 +25,46 @@ class Peer:
         self.bitfield = None
 
 
-    def handshake(self, peer_ip: str, peer_port: int):
+    def handshake(self, peer_ip: str, peer_port: int, conn: socket.socket):
         pstr = b'BitTorrent protocol'
         pstrlen = len(pstr)  # Length of the protocol string (19 bytes)
         reserved = b'\x00' * 8
         handshake = struct.pack(f'>B{pstrlen}s8s20s20s', pstrlen, pstr, reserved, self.info_hash, self.peer_id.encode())
 
         try:
-            sock = socket.create_connection((peer_ip, peer_port), timeout=2)
-            sock.send(handshake)
-            response, _ = sock.recvfrom(68)  # The response handshake should be 68 bytes
+            conn.connect((peer_ip, peer_port)); conn.settimeout(3)
+            conn.send(handshake)
+            response, _ = conn.recvfrom(68)  # The response handshake should be 68 bytes
             return response
 
-        except (ConnectionRefusedError, ConnectionResetError, TimeoutError) as e:
-            pass
+        except (ConnectionRefusedError, ConnectionResetError, TimeoutError, OSError):
+            return None
 
 
     def perform_handshakes(self, peers_dict: dict) -> dict:
-        available_peers: dict = {}
+        peer_connections: dict[tuple[str, int], socket.socket] = {}
+        lock = threading.Lock()
 
-        def perform_handshake_wrapper(ip, port):
-            response = self.handshake(ip, port)
+        def perform_handshake_wrapper(ip: str, port: int, conn: socket.socket):
+            response = self.handshake(ip, port, conn)
+            lock.acquire()
             if response is not None and response != b'':
-                print("RESPONSE IS ", response)
-                available_peers[ip] = port
+                peer_connections[(ip, port)] = conn
+            else:
+                sock.close()
+            lock.release()
 
         threads = []
         for peer_ip, peer_port in peers_dict.items():
-            thread = threading.Thread(target=perform_handshake_wrapper, args=(peer_ip, peer_port))
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            thread = threading.Thread(target=perform_handshake_wrapper, args=(peer_ip, peer_port, sock))
             threads.append(thread)
             thread.start()
 
-        # Wait for all threads to complete
         for thread in threads:
             thread.join()
 
-        return available_peers
+        return peer_connections
 
 
 """

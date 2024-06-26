@@ -1,3 +1,4 @@
+import socket
 import threading
 import requests
 from bcoding import bdecode, bencode
@@ -40,12 +41,10 @@ def main():
     peers_dict: dict = handler_response[0]
     tracker: tracker_handler.Tracker = handler_response[1]
 
-    pprint(peers_dict)
-
     our_peer: peers_handler.Peer = peers_handler.Peer(UNIQUE_CLIENT_ID, info_hash, "0", 0)
-    available_peers: dict = our_peer.perform_handshakes(peers_dict)
+    peer_connections: dict[tuple[str, int], socket.socket] = our_peer.perform_handshakes(peers_dict)
 
-    pprint(available_peers)
+    pprint(peer_connections)
 
 
 
