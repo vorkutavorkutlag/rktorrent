@@ -1,5 +1,5 @@
 import socket
-from pprint import pprint
+import urllib.parse
 
 import requests
 import struct
@@ -7,17 +7,31 @@ from random import randint
 from bcoding import bdecode
 
 
-class HTTP_Tracker:
-    def __init__(self, tracker_url: str, info_hash: str, size: int, unique_id: str, ip_address: str):
-        self.info_hash: bytes = bytes.fromhex(info_hash)
-        self.peer_id: bytes = bytes.fromhex(unique_id)
+class Tracker:
+    def __init__(self, info_hash: bytes, size: int, unique_id: str, tracker_hn: str, downloaded: int):
+        self.info_hash: bytes = info_hash
+        self.peer_id: bytes = unique_id.encode()
+        self.size: int = size
+        self.downloaded: int = downloaded
+        self.interval: int = 0  # Placeholder integer
+        self.tracker_hostname = tracker_hn
+
+
+    def peers_request(self) -> dict:
+        return {}
+
+    def inform_tracker(self, event: str) -> None:
+        return None
+
+
+class HTTP_Tracker(Tracker):
+    def __init__(self, tracker_url: str, info_hash: bytes, size: int, unique_id: str, ip_address: str, downloaded: int):
+        super().__init__(info_hash, size, unique_id, tracker_url, downloaded)
         self.ip: str = ip_address
         self.port: int = 6881
-        self.size: int = size
-        self.tracker_url: str = tracker_url
-        self.downloaded: int = 0
 
-    def peers_request(self):
+
+    def peers_request(self) -> dict:
         params: dict = \
             {"info_hash": self.info_hash,
              "peer_id": self.peer_id,
@@ -31,7 +45,7 @@ class HTTP_Tracker:
 
         while self.port <= 6889:
             try:
-                response: requests.Response = requests.get(self.tracker_url, params=params, timeout=5)
+                response: requests.Response = requests.get(self.tracker_hostname, params=params, timeout=5)
                 response.raise_for_status()
                 tracker_response: bytes = response.content
 
@@ -71,7 +85,7 @@ class HTTP_Tracker:
             except (struct.error, TypeError, ValueError, requests.RequestException, requests.HTTPError):
                 self.port += 1
                 continue
-        return None
+        return {}
 
     def inform_tracker(self, event: str):
         params: dict = \
@@ -85,31 +99,26 @@ class HTTP_Tracker:
              "event": event,
              "no_peer_id": 1}
 
-        response: requests.Response = requests.get(self.tracker_url, params=params, timeout=5)
+        response: requests.Response = requests.get(self.tracker_hostname, params=params, timeout=5)
         response.raise_for_status()
 
 
-class UDP_Tracker:
-    def __init__(self, tracker_url: str, info_hash: str, size: int, unique_id: str):
-        self.info_hash: bytes = bytes.fromhex(info_hash)
-        self.peer_id: bytes = bytes.fromhex(unique_id)
+class UDP_Tracker(Tracker):
+    def __init__(self, tracker_url: urllib.parse.ParseResult, info_hash: bytes, size: int, unique_id: str, downloaded:int):
+        super().__init__(info_hash, size, unique_id, tracker_url.hostname, downloaded)
         self.ip: int = 0
-        self.port: int = 6881
-        self.size: int = size
-        self.tracker_url: str = tracker_url
-        self.downloaded: int = 0
-        self.interval: int = 0  # Placeholder integer
-        self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.port: int = tracker_url.port
+        self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)  # DGRAM - UDP. STREAM - TCP
 
 
-    def connection_request(self):
+    def connection_request(self) -> tuple:
         connection_id = 0x41727101980  # Magic constant
         action = 0  # Action: connect
         transaction_id = randint(0, 65535)
         response_length = 16
 
         packet = struct.pack("!qii", connection_id, action, transaction_id)
-        self.socket.sendto(packet, self.tracker_url)
+        self.socket.sendto(packet, (self.tracker_hostname, self.port))
         response, _ = self.socket.recvfrom(response_length)
         res_action, res_transaction, connection_id = struct.unpack("!iiq", response)
 
@@ -118,7 +127,7 @@ class UDP_Tracker:
 
         return connection_id, transaction_id
 
-    def peers_request(self):
+    def peers_request(self) -> dict:
         connection_id, transaction_id = self.connection_request()
         action = 1  # Action: announce
         event = 2   # Event: started
@@ -127,34 +136,52 @@ class UDP_Tracker:
         num_want = -1
 
         packet = struct.pack("!qii20s20sqqqiiiih", connection_id, action, transaction_id, self.info_hash, self.peer_id,
-                             self.downloaded, self.size-self.downloaded, uploaded, event, self.ip, key, num_want, self.port)
-        self.socket.sendto(packet, self.tracker_url)
-        response, _ = self.socket.recvfrom(4096)
+                             self.downloaded, self.size-self.downloaded, uploaded,
+                             event, self.ip, key, num_want, self.port)
 
-        res_action, res_transaction_id, interval, leechers, seeders = struct.unpack("!iiiii", response[:20])
-        if res_action != 1 or res_transaction_id != transaction_id:
-            raise Exception("Invalid announce response")
+        try:
+            self.socket.sendto(packet, (self.tracker_hostname, self.port))
+            response, _ = self.socket.recvfrom(4096)
 
-        peers_dict = {}
-        for i in range(20, len(response), 6):
-            ip = struct.unpack("!I", response[i:i + 4])[0]
-            port = struct.unpack("!H", response[i + 4:i + 6])[0]
-            peers_dict[(socket.inet_ntoa(struct.pack("!I", ip)))] = port
+            res_action, res_transaction_id, interval, leechers, seeders = struct.unpack("!iiiii", response[:20])
+            if res_action != 1 or res_transaction_id != transaction_id:
+                raise Exception("Invalid announce response")
 
-        self.interval = interval
-        return peers_dict
+            peers_dict = {}
+            for i in range(20, len(response), 6):
+                ip = struct.unpack("!I", response[i:i + 4])[0]
+                port = struct.unpack("!H", response[i + 4:i + 6])[0]
+                peers_dict[(socket.inet_ntoa(struct.pack("!I", ip)))] = port
+
+            self.interval = interval
+            return peers_dict
+
+        except socket.error:
+            return {}
+
+    def inform_tracker(self, event: str) -> None:
+        return None
+
+    def finish(self):
+        event = "completed"
+        self.inform_tracker(event)
+        self.socket.close()
 
 
 
-def announce_to_peers(announce_list: list[str], info_hash: str, size: int, unique_id: str, ip_address: str) -> (bytes, str):
+
+def announce_to_peers(announce_list: list[str], info_hash: bytes,
+                      size: int, unique_id: str, ip_address: str, downloaded: int) -> (bytes, str):
+
     for tracker_url in announce_list:
-        if tracker_url[:3] == "udp":
-            Tracker_Conn = UDP_Tracker(tracker_url, info_hash, size, unique_id)
+        parsed_url = urllib.parse.urlparse(tracker_url)
+        if parsed_url.scheme in ['udp']:
+            Tracker_Conn: Tracker = UDP_Tracker(parsed_url, info_hash, size, unique_id, downloaded)
             peers_dict = Tracker_Conn.peers_request()
             return peers_dict, Tracker_Conn
 
-        if tracker_url[:4] == "http":
-            Tracker_Conn = HTTP_Tracker(tracker_url, info_hash, size, unique_id, ip_address)
+        if parsed_url.scheme in ['http']:
+            Tracker_Conn: Tracker = HTTP_Tracker(tracker_url, info_hash, size, unique_id, ip_address, downloaded)
             peers_dict = Tracker_Conn.peers_request()
             return peers_dict, Tracker_Conn
 
