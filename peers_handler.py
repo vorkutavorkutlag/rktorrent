@@ -42,14 +42,15 @@ class Peer:
 
 
     def perform_handshakes(self, peers_dict: dict) -> dict:
-        peer_connections: dict[tuple[str, int], socket.socket] = {}
+        peer_connections: dict[Peer, socket.socket] = {}
         lock = threading.Lock()
 
         def perform_handshake_wrapper(ip: str, port: int, conn: socket.socket):
             response = self.handshake(ip, port, conn)
             lock.acquire()
             if response is not None and response != b'':
-                peer_connections[(ip, port)] = conn
+                peer: Peer = Peer("", self.info_hash, ip, port)
+                peer_connections[peer] = conn
             else:
                 sock.close()
             lock.release()
@@ -65,6 +66,51 @@ class Peer:
             thread.join()
 
         return peer_connections
+
+
+    @staticmethod
+    def find_additional_peers(peer_sock: socket.socket):
+        peer_sock.send(b'REQUEST_PEERS')
+        response, _ = peer_sock.recvfrom(4096)
+
+        new_peers: set = set()
+        for i in range(0, len(response), 6):
+            ip_bytes = response[i:i + 4]
+            port_bytes = response[i + 4:i + 6]
+
+            if len(ip_bytes) < 4 or len(port_bytes) < 2:
+                continue
+
+            ip = socket.inet_ntoa(ip_bytes)
+            port = struct.unpack('!H', port_bytes)[0]
+            if port == 0 or port == 65535 or ip == '255.255.255.255' or ip.startswith('0.'):
+                continue
+            new_peers.add((ip, port))
+        return new_peers
+
+    def find_all_additional_peers(self, available_peers: dict['Peer', socket.socket]):
+        all_new_peers: set = set()
+        lock = threading.Lock()
+
+        def find_peers_wrapper(conn: socket.socket):
+            new_peers = self.find_additional_peers(conn)
+            if new_peers is not None:
+                lock.acquire()
+                nonlocal all_new_peers
+                all_new_peers = all_new_peers.union(new_peers)
+                lock.release()
+
+        threads = []
+        for sock in available_peers.values():
+            thread = threading.Thread(target=find_peers_wrapper, args=[sock])
+            threads.append(thread)
+            thread.start()
+
+        for thread in threads:
+            thread.join()
+
+
+        return all_new_peers
 
 
 """

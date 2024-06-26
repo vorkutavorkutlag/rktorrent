@@ -1,5 +1,5 @@
 import socket
-import threading
+import logging
 import requests
 from bcoding import bdecode, bencode
 from hashlib import sha1
@@ -35,17 +35,26 @@ def main():
     test_torrent: str = "C:\\Users\\mensc\\Downloads\\Atomic_Heart.torrent"
     announce_list, piece_length, info_hash, size = read_torrent(test_torrent)
 
+    logging.debug("Read file")
+
     handler_response = \
         tracker_handler.announce_to_peers(announce_list, info_hash, size, UNIQUE_CLIENT_ID, IP_ADDRESS, 0)
 
     peers_dict: dict = handler_response[0]
     tracker: tracker_handler.Tracker = handler_response[1]
 
-    our_peer: peers_handler.Peer = peers_handler.Peer(UNIQUE_CLIENT_ID, info_hash, "0", 0)
-    peer_connections: dict[tuple[str, int], socket.socket] = our_peer.perform_handshakes(peers_dict)
+    our_peer: peers_handler.Peer = peers_handler.Peer(UNIQUE_CLIENT_ID, info_hash, "localhost", 0)
+    peer_connections: dict[peers_handler.Peer, socket.socket] = our_peer.perform_handshakes(peers_dict)
+
+    new_peers: set = our_peer.find_all_additional_peers(peer_connections)
+    new_peers_dict = {}
+    for ip, port in new_peers:
+        new_peers_dict[ip] = port
+    additional_peer_connections: dict[peers_handler.Peer, socket.socket] = our_peer.perform_handshakes(new_peers_dict)
+
+    peer_connections: dict[peers_handler.Peer, socket.socket] = peer_connections | additional_peer_connections
 
     pprint(peer_connections)
-
 
 
 if __name__ == "__main__":
