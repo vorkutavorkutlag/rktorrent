@@ -30,18 +30,20 @@ class Peer:
         pstrlen = len(pstr)  # Length of the protocol string (19 bytes)
         reserved = b'\x00' * 8
         handshake = struct.pack(f'>B{pstrlen}s8s20s20s', pstrlen, pstr, reserved, self.info_hash, self.peer_id.encode())
+        # HANDSHAKE ACCORDING TO THE TCP PEER WIRE PROTOCOL
 
         try:
             conn.connect((peer_ip, peer_port)); conn.settimeout(3)
             conn.send(handshake)
-            response, _ = conn.recvfrom(68)  # The response handshake should be 68 bytes
+            response, _ = conn.recvfrom(68)  # HANDSHAKE LENGTH IS CONSTANT, 68 BYTES
             return response
 
         except (ConnectionRefusedError, ConnectionResetError, TimeoutError, OSError):
             return None
 
 
-    def perform_handshakes(self, peers_dict: dict) -> dict:
+    def perform_handshakes(self, peers_dict: dict) -> dict['Peer', socket.socket]:
+        # ADDS MULTITHREADING TO THE HANDSHAKE FUNCTION, RETURNS PEER OBJECTS AND SOCKET CONNECTIONS
         peer_connections: dict[Peer, socket.socket] = {}
         lock = threading.Lock()
 
@@ -70,6 +72,7 @@ class Peer:
 
     @staticmethod
     def find_additional_peers(peer_sock: socket.socket):
+        # REQUESTS PEERS FROM A SELECTED PEER, FILTERS OUT INVALID ADDRESSES AND RETURNS POTENTIAL NEW PEERS
         peer_sock.send(b'REQUEST_PEERS')
         response, _ = peer_sock.recvfrom(4096)
 
@@ -89,6 +92,10 @@ class Peer:
         return new_peers
 
     def find_all_additional_peers(self, available_peers: dict['Peer', socket.socket]):
+        # ADDS MULTITHREADING TO THE FIND ADDITIONAL PEERS FUNCTION
+        # CONTACTS ALL CURRENT AVAILABLE PEERS
+        # RETURNS PEER OBJECTS AND SOCKET CONNECTIONS
+        # MOST MIGHT NOT BE AVAILABLE, BUT THE TIME SPENT ON MAKING SURE IS WORTH IT IF WE DO FIND MORE PEERS
         all_new_peers: set = set()
         lock = threading.Lock()
 
@@ -123,5 +130,3 @@ def find_rarest(peers: list[Peer], num_pieces: int):
     return piece_counts.index(min(piece_counts))
 """
 
-if __name__ == "__main__":
-    pass
