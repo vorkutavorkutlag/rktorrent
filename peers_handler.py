@@ -3,16 +3,20 @@ import struct
 import socket
 from pprint import pprint
 
-CHOKE = 0
-UNCHOKE = 1
-INTERESTED = 2
-NOT_INTERESTED = 3
-HAVE = 4
-BITFIELD = 5
-REQUEST = 6
-PIECE = 7
-CANCEL = 8
-PORT = 9
+
+class Bittorrent_Constants:
+    CHOKE = 0
+    UNCHOKE = 1
+    INTERESTED = 2
+    NOT_INTERESTED = 3
+    HAVE = 4
+    BITFIELD = 5
+    REQUEST = 6
+    PIECE = 7
+    CANCEL = 8
+    PORT = 9
+
+    PIECE_LENGTH = 2 ** 14  # Can be changed, but works best at this value.
 
 
 
@@ -23,7 +27,35 @@ class Peer:
         self.port: int = port
         self.info_hash: bytes = info_hash
         self.bitfield = None
+        self.choking = True
 
+    @staticmethod
+    def send_interested(sock: socket.socket):
+        length_prefix = 1
+        message_id = Bittorrent_Constants.INTERESTED
+        message = struct.pack(">IB", length_prefix, message_id)
+        sock.sendall(message)
+
+    @staticmethod
+    def find_additional_peers(peer_sock: socket.socket):
+        # REQUESTS PEERS FROM A SELECTED PEER, FILTERS OUT INVALID ADDRESSES AND RETURNS POTENTIAL NEW PEERS
+        peer_sock.send(b'REQUEST_PEERS')
+        response, _ = peer_sock.recvfrom(4096)
+
+        new_peers: set = set()
+        for i in range(0, len(response), 6):
+            ip_bytes = response[i:i + 4]
+            port_bytes = response[i + 4:i + 6]
+
+            if len(ip_bytes) < 4 or len(port_bytes) < 2:
+                continue
+
+            ip = socket.inet_ntoa(ip_bytes)
+            port = struct.unpack('!H', port_bytes)[0]
+            if port == 0 or port == 65535 or ip == '255.255.255.255' or ip.startswith('0.'):
+                continue
+            new_peers.add((ip, port))
+        return new_peers
 
     def handshake(self, peer_ip: str, peer_port: int, conn: socket.socket):
         pstr = b'BitTorrent protocol'
@@ -31,16 +63,14 @@ class Peer:
         reserved = b'\x00' * 8
         handshake = struct.pack(f'>B{pstrlen}s8s20s20s', pstrlen, pstr, reserved, self.info_hash, self.peer_id.encode())
         # HANDSHAKE ACCORDING TO THE TCP PEER WIRE PROTOCOL
-
         try:
-            conn.connect((peer_ip, peer_port)); conn.settimeout(3)
+            conn.connect((peer_ip, peer_port)); conn.settimeout(5)
             conn.send(handshake)
             response, _ = conn.recvfrom(68)  # HANDSHAKE LENGTH IS CONSTANT, 68 BYTES
             return response
 
         except (ConnectionRefusedError, ConnectionResetError, TimeoutError, OSError):
             return None
-
 
     def perform_handshakes(self, peers_dict: dict) -> dict['Peer', socket.socket]:
         # ADDS MULTITHREADING TO THE HANDSHAKE FUNCTION, RETURNS PEER OBJECTS AND SOCKET CONNECTIONS
@@ -68,28 +98,6 @@ class Peer:
             thread.join()
 
         return peer_connections
-
-
-    @staticmethod
-    def find_additional_peers(peer_sock: socket.socket):
-        # REQUESTS PEERS FROM A SELECTED PEER, FILTERS OUT INVALID ADDRESSES AND RETURNS POTENTIAL NEW PEERS
-        peer_sock.send(b'REQUEST_PEERS')
-        response, _ = peer_sock.recvfrom(4096)
-
-        new_peers: set = set()
-        for i in range(0, len(response), 6):
-            ip_bytes = response[i:i + 4]
-            port_bytes = response[i + 4:i + 6]
-
-            if len(ip_bytes) < 4 or len(port_bytes) < 2:
-                continue
-
-            ip = socket.inet_ntoa(ip_bytes)
-            port = struct.unpack('!H', port_bytes)[0]
-            if port == 0 or port == 65535 or ip == '255.255.255.255' or ip.startswith('0.'):
-                continue
-            new_peers.add((ip, port))
-        return new_peers
 
     def find_all_additional_peers(self, available_peers: dict['Peer', socket.socket]):
         # ADDS MULTITHREADING TO THE FIND ADDITIONAL PEERS FUNCTION
@@ -119,14 +127,47 @@ class Peer:
 
         return all_new_peers
 
+    def send_all_interested(self, available_peers: dict['Peer', socket.socket]):
+        response_length = 5  # 4 - length, 1 - ID
 
-"""
-def find_rarest(peers: list[Peer], num_pieces: int):
-    piece_counts = [0] * num_pieces
-    for peer in peers:
-        for index, has_piece in enumerate(peer.bitfield):
-            if has_piece:
-                piece_counts[index] += 1
-    return piece_counts.index(min(piece_counts))
-"""
+        def send_interested_wrapper(peer: Peer, conn: socket.socket):
+            try:
+                self.send_interested(conn)
+                response = conn.recv(response_length)
+                length_prefix = response[:4]
+                length = struct.unpack('>I', length_prefix)[0]
+                response_id = response[4]
+
+                match response_id:
+                    case Bittorrent_Constants.CHOKE:
+                        peer.choking = True
+                    case Bittorrent_Constants.UNCHOKE:
+                        peer.choking = False
+
+                    case Bittorrent_Constants.BITFIELD:
+                        bitfield = conn.recv(length - 1)
+                        peer.bitfield = ''.join(format(byte, '08b') for byte in bitfield)
+                        peer.choking = False
+
+
+            except (IndexError, socket.error):
+                peer.choking = True
+
+        threads = []
+        for peer, sock in available_peers.items():
+            thread = threading.Thread(target=send_interested_wrapper, args=[peer, sock])
+            threads.append(thread)
+            thread.start()
+
+        for thread in threads:
+            thread.join()
+
+    @staticmethod
+    def find_rarest(peers: list['Peer'], num_pieces: int):
+        piece_counts = [0] * num_pieces
+        for peer in peers:
+            for index, has_piece in enumerate(peer.bitfield):
+                if has_piece:
+                    piece_counts[index] += 1
+        return piece_counts.index(min(piece_counts))
 

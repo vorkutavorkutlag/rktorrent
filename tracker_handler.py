@@ -89,6 +89,7 @@ class HTTP_Tracker(Tracker):   # TRACKER ACCORDING TO THE HTTP VARIATION OF THE 
                 self.port += 1
                 # CYCLE THROUGH THE PORTS 6881 to 6889, WHERE BITTORRENT TAKES PLACE
                 continue
+
         return {}
 
     def inform_tracker(self, event: str):
@@ -113,12 +114,12 @@ class HTTP_Tracker(Tracker):   # TRACKER ACCORDING TO THE HTTP VARIATION OF THE 
 
 
 class UDP_Tracker(Tracker):      # TRACKER ACCORDING TO THE UDP VARIATION OF THE PROTOCOL
-    def __init__(self, tracker_url: urllib.parse.ParseResult, info_hash: bytes, size: int, unique_id: str, downloaded:int):
+    def __init__(self, tracker_url: urllib.parse.ParseResult, info_hash: bytes, size: int, unique_id: str, downloaded: int):
         super().__init__(info_hash, size, unique_id, tracker_url.hostname, downloaded)
         self.ip: int = 0
         self.port: int = tracker_url.port
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)  # DGRAM - UDP. STREAM - TCP
-
+        self.socket.settimeout(5)
 
     def connection_request(self) -> tuple:     # REQUESTS CONNECTION ACCORDING TO THE PROTOCOL
         connection_id = 0x41727101980  # Magic constant
@@ -139,10 +140,10 @@ class UDP_Tracker(Tracker):      # TRACKER ACCORDING TO THE UDP VARIATION OF THE
     def peers_request(self) -> dict:
         connection_id, transaction_id = self.connection_request()
         action = 1  # Action: announce
-        event = "2"   # Event: started
+        event = 2   # Event: started
         key = randint(0, 65535)
         uploaded = 0
-        num_want = -1  # Default, means we don't care how much we get
+        num_want = -1  # Default, means we don't care how much peers we get
 
         packet = struct.pack("!qii20s20sqqqiiiih", connection_id, action, transaction_id, self.info_hash, self.peer_id,
                              self.downloaded, self.size-self.downloaded, uploaded,
@@ -168,7 +169,7 @@ class UDP_Tracker(Tracker):      # TRACKER ACCORDING TO THE UDP VARIATION OF THE
         except socket.error:
             return {}
 
-    def inform_tracker(self, event: str) -> None:
+    def inform_tracker(self, event: int) -> None:
         # INFORMS TRACKER OF DOWNLOAD PROGRESS WITHOUT NEEDING TO UNPACK PEER INFO
         connection_id, transaction_id = self.connection_request()
         action = 1  # Action: announce
@@ -188,26 +189,35 @@ class UDP_Tracker(Tracker):      # TRACKER ACCORDING TO THE UDP VARIATION OF THE
             pass
 
     def finish(self):
-        event = "completed"
+        event = 1
         self.inform_tracker(event)
         self.socket.close()
 
 
 
 
-def announce_to_peers(announce_list: list[str], info_hash: bytes,
+def announce_to_peers(announce_list: list[str, list[str]], info_hash: bytes,
                       size: int, unique_id: str, ip_address: str, downloaded: int) -> (bytes, str):
 
     for tracker_url in announce_list:
-        parsed_url = urllib.parse.urlparse(tracker_url)
+        if type(tracker_url) is list:
+            parsed_url = urllib.parse.urlparse(tracker_url[0])
+        else:
+            parsed_url = urllib.parse.urlparse(tracker_url)
+
         if parsed_url.scheme in ['udp']:
-            Tracker_Conn: Tracker = UDP_Tracker(parsed_url, info_hash, size, unique_id, downloaded)
-            peers_dict = Tracker_Conn.peers_request()
-            return peers_dict, Tracker_Conn
+            try:
+                Tracker_Conn: Tracker = UDP_Tracker(parsed_url, info_hash, size, unique_id, downloaded)
+                peers_dict = Tracker_Conn.peers_request()
+                return peers_dict, Tracker_Conn
+            except (socket.timeout, socket.gaierror):
+                continue
 
         if parsed_url.scheme in ['http']:
             Tracker_Conn: Tracker = HTTP_Tracker(tracker_url, info_hash, size, unique_id, ip_address, downloaded)
             peers_dict = Tracker_Conn.peers_request()
+            if peers_dict == {}:
+                continue
             return peers_dict, Tracker_Conn
 
 
