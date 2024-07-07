@@ -21,15 +21,32 @@ class Bittorrent_Constants:
     BLOCK_LENGTH = 2 ** 14  # Can be changed, but works best at this value.
 
 
+class Index:
+    def __init__(self, val):
+        self.value = val
+        self.status = "Absent"
+
+
 class Peer:
     def __init__(self, peer_id: str, info_hash: bytes, ip: str, port: int):
         self.peer_id: str = peer_id
         self.ip: str = ip
         self.port: int = port
         self.info_hash: bytes = info_hash
-        self.bitfield = None
-        self.choking = True
-        self.being_used = False
+        self.bitfield: (None, bytearray) = None
+        self.choking: bool = True
+        self.being_used: bool = False
+
+
+    @staticmethod
+    def recv_all(conn: socket.socket, length: int):
+        data = b''
+        while len(data) < length:
+            packet = conn.recv(length - len(data))
+            if not packet:
+                raise ValueError("Connection closed unexpectedly")
+            data += packet
+        return data
 
     @staticmethod
     def send_interested(sock: socket.socket) -> None:
@@ -39,40 +56,22 @@ class Peer:
         sock.sendall(message)
 
     @staticmethod
-    def send_request(sock: socket.socket, piece_index: int, begin: int, length: int = Bittorrent_Constants.BLOCK_LENGTH) -> None:
-        length_prefix = 1 + len(bytes(piece_index)) + len(bytes(begin)) + len(bytes(length))
+    def send_request(sock: socket.socket, piece_index: int, begin: int, length: int) -> None:
+        length_prefix = 1 + 4 + 4 + 4  # 1 BYTE ID, 4 BYTE PIECE INDEX, 4 BYTE OFFSET, 4 BYTE LENGTH
         message_id = Bittorrent_Constants.REQUEST
         message = struct.pack('>IBIII', length_prefix, message_id, piece_index, begin, length)
         sock.sendall(message)
 
-    @staticmethod
-    def await_unchoke(sock: socket.socket):
-        sock.settimeout(None)
+
+    def await_unchoke(self, sock: socket.socket, piece_index: int, begin: int, length: int):
         while True:
-            # LENGTH PREFIX - 4 BYTES
-            length_prefix = sock.recv(4)
-            if not length_prefix:
-                continue
-            try:
-                length = struct.unpack('>I', length_prefix)[0]
-            except struct.error:
-                print("EL PROBLEM DE LENGTH ", length_prefix)
-
-            # MESSAGE ID - 1 BYTE
-            message_id = sock.recv(1)
-            if not message_id:
-                continue
-
-            if message_id[0] == Bittorrent_Constants.UNCHOKE:
-                print(f"{sock} Unchoked")
-                return
-            else:
-                # SKIP THE REST
-                if length > 1:
-                    sock.recv(length - 1)
-
-            # SLEEP BEFORE OPTIMISTICALLY UNCHOKING
-            time.sleep(1)
+            time.sleep(5)
+            self.send_request(sock, piece_index, begin, length)
+            basic_header_len = 4 + 1
+            basic_header = sock.recv(basic_header_len)
+            response_length, response_id = struct.unpack(">IB", basic_header)
+            if response_id == Bittorrent_Constants.UNCHOKE:
+                break
 
     @staticmethod
     def bitfield_counter_map(peers: list['Peer'], num_pieces: int) -> list[int]:  # Counter hashmap of the bitfields
@@ -81,12 +80,12 @@ class Peer:
             if peer.choking is True:
                 continue
             for index, has_piece in enumerate(peer.bitfield):
-                if has_piece == '1':
+                if has_piece:
                     piece_counts[index] += 1
         return piece_counts
 
     @staticmethod
-    def find_additional_peers(peer_sock: socket.socket) -> set:
+    def send_peers_request(peer_sock: socket.socket) -> set:
         # REQUESTS PEERS FROM A SELECTED PEER, FILTERS OUT INVALID ADDRESSES AND RETURNS POTENTIAL NEW PEERS
         peer_sock.send(b'REQUEST_PEERS')
         response, _ = peer_sock.recvfrom(4096)
@@ -158,7 +157,7 @@ class Peer:
         lock = threading.Lock()
 
         def find_peers_wrapper(conn: socket.socket):
-            new_peers = self.find_additional_peers(conn)
+            new_peers = self.send_peers_request(conn)
             if new_peers is not None:
                 lock.acquire()
                 nonlocal all_new_peers
@@ -195,7 +194,8 @@ class Peer:
 
                     case Bittorrent_Constants.BITFIELD:
                         bitfield = conn.recv(length - 1)
-                        peer.bitfield = ''.join(format(byte, '08b') for byte in bitfield)
+                        bitfield_str = ''.join(format(byte, '08b') for byte in bitfield)
+                        peer.bitfield = bytearray(int(byte) for byte in bitfield_str)
                         peer.choking = False
 
 
@@ -213,24 +213,24 @@ class Peer:
 
 
     def download_process(self, num_pieces: int, piece_length: int, available_peers: dict['Peer', socket.socket]):
+        # ASCENDING ORDER LIST OF INDEXES, ALLOWS FOR RAREST PIECE SELECTION
         bitfield_counter_map: list[int] = self.bitfield_counter_map(list(available_peers.keys()), num_pieces)
-        indexed_occurrences = sorted(enumerate(bitfield_counter_map), key=lambda x: x[1])
-        sorted_indexes = [index for index, occurrence in indexed_occurrences]
-        piece_status = {key: "Absent" for key in sorted_indexes}  # ALLOWS FOR EASY IMPLEMENTATION OF RAREST PIECE
+        sorted_indexes: list[int] = sorted(range(len(bitfield_counter_map)), key=lambda x: bitfield_counter_map[x])
+        piece_statuses: list[Index] = list(Index(ind) for ind in sorted_indexes)
         print("Beginning download process...")
         lock = threading.Lock()
 
         def download_process_wrapper(conn: socket.socket):
-            # FIRST, WE SELECT PIECE AND PEER
-            # FIND A PIECE THAT HAS NOT BEEN DOWNLOADED, AND A PEER THAT HAS IT
-            # IF NO PAIR IS FOUND, IT MEANS WE EITHER COMPLETED THE DOWNLOAD OR OTHER THREADS ARE DOWNLOADING THE END
             lock.acquire()
+            # region SELECT PIECE AND PEER
             unavailable_pieces = []
             while True:
                 piece_index: int = -1
-                for ind, stat in piece_status.items():
-                    if stat == "Absent" and ind not in unavailable_pieces:
-                        piece_index = ind
+                index_of_index: int = -1
+                for index in piece_statuses:
+                    index_of_index += 1
+                    if index.status == "Absent" and index.value not in unavailable_pieces:
+                        piece_index = index.value
                         break
                 if piece_index == -1:
                     lock.release()
@@ -238,74 +238,58 @@ class Peer:
 
                 target_peer: (Peer, None) = None
                 for p in available_peers.keys():
-                    if p.choking is False and p.being_used is False and p.bitfield[piece_index] == '1':
+                    if p.choking is False and p.being_used is False and p.bitfield[piece_index] == 1:
                         target_peer = p
                         p.being_used = True
+                        piece_statuses[index_of_index].status = "Downloading"
                         break
-
                 if target_peer is not None:
-                    piece_status[piece_index] = "Downloading"
                     break
                 unavailable_pieces.append(piece_index)
-            lock.release()
 
-            # SECOND, THE ACTUAL DOWNLOADING
-            # USING THE REQUEST MESSAGE
+            print("FOUND VALID PAIR ", (piece_index, target_peer))
+            print("I hope this time it goes better, God willing")
+            lock.release()
+            # endregion
+
+            # region DOWNLOAD
             piece_data: bytes = b''
             begin_offset: int = 0
-            basic_header_len = 4 + 1  # ACCORDING TO THE MESSAGE EXCHANGE PROTOCOL
-            full_header_len = 4 + 1 + 4 + 4
-
+            len_prefix_len = 4
+            need_to_send = True
             while len(piece_data) < piece_length:
-                self.send_request(available_peers[target_peer], piece_index, begin_offset)
-                received_block = False
+                if need_to_send:
+                    self.send_request(conn, piece_index, begin_offset, Bittorrent_Constants.BLOCK_LENGTH)
+                len_prefix = int.from_bytes(conn.recv(len_prefix_len), byteorder="big")
+                if len_prefix == 0:     # KEEP ALIVE MESSAGE
+                    need_to_send = False
+                    continue
+                response_id = int.from_bytes(conn.recv(1), byteorder="big")
+                need_to_send = True
 
-                while not received_block:
-                    try:
-                        basic_header: bytes = conn.recv(basic_header_len)
-                    except TimeoutError:
-                        break
 
-                    print("BASIC HEADER ", basic_header)
-                    if basic_header == b'':
+                match response_id:
+                    case Bittorrent_Constants.PIECE:
+                        data = self.recv_all(conn, len_prefix - 1)
+                        block = data[9:]
+                        piece_data += block
+                        begin_offset += Bittorrent_Constants.BLOCK_LENGTH
+                        print(f"DOWNLOAD PROGRESS FOR PIECE #{piece_index}: {(len(piece_data)/piece_length)*100}%")
+                    case Bittorrent_Constants.CHOKE:
+                        self.await_unchoke(conn, piece_index, begin_offset, Bittorrent_Constants.BLOCK_LENGTH)
+                    case Bittorrent_Constants.HAVE:
+                        new_index = int.from_bytes(conn.recv(len_prefix - 1), byteorder="big")
+                        target_peer.bitfield[new_index] = 1
+                    case Bittorrent_Constants.UNCHOKE:
+                        need_to_send = False
                         continue
-
-                    length_prefix, message_id = struct.unpack('>IB', basic_header)
-
-
-                    match message_id:
-                        case Bittorrent_Constants.PIECE:
-                            rest_of_header = conn.recv(full_header_len - basic_header_len)
-                            response_index, response_offset = struct.unpack(rest_of_header, ">II")
-
-                            payload_len = length_prefix - 1
-                            payload: bytes = conn.recv(payload_len)
-                            piece_data += payload
-                            begin_offset += Bittorrent_Constants.BLOCK_LENGTH
-                            print(f"PIECE DOWNLOAD PROGRESS : {(len(piece_data) / piece_length) * 100}%")
-
-                        case Bittorrent_Constants.CHOKE:
-                            target_peer.choking = True
-                            self.await_unchoke(conn)
-                            break
-
-                        case Bittorrent_Constants.UNCHOKE:
-                            break
-
-                        case Bittorrent_Constants.HAVE:
-                            new_index = struct.unpack(">I", conn.recv(length_prefix - 1))
-                            print("NEW INDEX ", new_index)
-                            target_peer.bitfield[new_index] = "1"
-
-                        case _:
-                            continue
-
-
-
-            print(f"THE DATA : {piece_data}")
-
-            with open(f'piece_test_{piece_index}.txt', 'wb+') as test_file:
+            print("It should create a file...")
+            with open(f"test_piece_{piece_index}.txt", 'wb+') as test_file:
                 test_file.write(piece_data)
+            # endregion
+
+
+
 
 
 

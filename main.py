@@ -1,9 +1,9 @@
 import socket
-import logging
 import requests
+import time
 from bcoding import bdecode, bencode
 from hashlib import sha1
-import struct
+from math import ceil
 from uuid import uuid4
 from pprint import pprint
 
@@ -28,17 +28,18 @@ def read_torrent(path: str) -> (dict, str, int):  # READS TORRENT FILE, EXTRACTS
             num_files: int = len(torrent_json['info']['files'])
             size: int = sum(file['length'] for file in torrent_json['info']['files'])
 
-        return announce_list, piece_length, hashed_info, size
+        num_pieces: int = ceil(size / piece_length)
+        return announce_list, piece_length, hashed_info, size, num_pieces
 
 
 
 
 def main():
     # TO BE REPLACED WITH A PROMPT FROM THE GUI
-    test_torrent: str = "C:\\Users\\mensc\\Downloads\\Titanic (1997) [720p] [BluRay] [YTS.MX].torrent"
+    test_torrent: str = "C:\\Users\\mensc\\Downloads\\shovel_knight_dig_v1_1_5_rar.torrent"
 
     # CALLS THE READ TORRENT FUNCTION
-    announce_list, piece_length, info_hash, size = read_torrent(test_torrent)
+    announce_list, piece_length, info_hash, size, num_pieces = read_torrent(test_torrent)
 
     print("Read file")
     # FINDS A STABLE CONNECTION WITH A TRACKER, REQUESTS PEER INFO
@@ -52,7 +53,10 @@ def main():
 
     # DOES HANDSHAKES WITH PEERS, FINDS OUT WHICH PEERS ARE AVAILABLE. !! KEEPS CONNECTION OPEN VIA SOCKET !!
     client_peer: peers_handler.Peer = peers_handler.Peer(UNIQUE_CLIENT_ID, info_hash, "localhost", 0)
-    peer_connections: dict[peers_handler.Peer, socket.socket] = client_peer.perform_handshakes(peers_dict)
+    peer_connections = {}
+
+    while peer_connections == {}:
+        peer_connections: dict[peers_handler.Peer, socket.socket] = client_peer.perform_handshakes(peers_dict)
 
     print("Handshaked")
 
@@ -66,14 +70,17 @@ def main():
 
     # COMPLETE PEER LIST THAT THE PROGRAM WILL BE WORKING WITH
     peer_connections: dict[peers_handler.Peer, socket.socket] = peer_connections | additional_peer_connections
+    print("Handshaked some more")
     """
 
-    print("Handshaked some more")
     pprint(peer_connections)
 
     client_peer.send_all_interested(peer_connections)
 
     print("Got bitfield")
+
+    # DOWNLOADING PROCESS
+    client_peer.download_process(num_pieces, piece_length, peer_connections)
 
 
 
