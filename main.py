@@ -22,14 +22,12 @@ def read_torrent(path: str) -> (dict, str, int):  # READS TORRENT FILE, EXTRACTS
 
         # IF THERE'S NO 'files' KEY, THERE IS ONLY ONE FILE
         if 'files' not in torrent_json['info'].keys():
-            num_files: int = 1
             size: int = torrent_json['info']['length']
         else:
-            num_files: int = len(torrent_json['info']['files'])
             size: int = sum(file['length'] for file in torrent_json['info']['files'])
 
         num_pieces: int = ceil(size / piece_length)
-        return announce_list, piece_length, hashed_info, size, num_pieces
+        return announce_list, piece_length, hashed_info, size, num_pieces, torrent_json['info']
 
 
 
@@ -39,7 +37,7 @@ def main():
     test_torrent: str = "C:\\Users\\mensc\\Downloads\\shovel_knight_dig_v1_1_5_rar.torrent"
 
     # CALLS THE READ TORRENT FUNCTION
-    announce_list, piece_length, info_hash, size, num_pieces = read_torrent(test_torrent)
+    announce_list, piece_length, info_hash, size, num_pieces, torrent_info = read_torrent(test_torrent)
 
     print("Read file")
     # FINDS A STABLE CONNECTION WITH A TRACKER, REQUESTS PEER INFO
@@ -59,19 +57,21 @@ def main():
         peer_connections: dict[peers_handler.Peer, socket.socket] = client_peer.perform_handshakes(peers_dict)
 
     print("Handshaked")
-
-    """
-    # SEARCHES FOR ADDITIONAL PEERS USING DHT, THEN CHECKS AVAILABILITY OF THOSE PEERS
-    new_peers: set = client_peer.find_all_additional_peers(peer_connections)
-    new_peers_dict = {}
-    for ip, port in new_peers:
-        new_peers_dict[ip] = port
-    additional_peer_connections: dict[peers_handler.Peer, socket.socket] = client_peer.perform_handshakes(new_peers_dict)
-
-    # COMPLETE PEER LIST THAT THE PROGRAM WILL BE WORKING WITH
-    peer_connections: dict[peers_handler.Peer, socket.socket] = peer_connections | additional_peer_connections
-    print("Handshaked some more")
-    """
+    # old_connections = peer_connections
+    #
+    # # SEARCHES FOR ADDITIONAL PEERS USING DHT, THEN CHECKS AVAILABILITY OF THOSE PEERS
+    # new_peers: set = client_peer.find_all_additional_peers(peer_connections)
+    # new_peers_dict = {}
+    # for ip, port in new_peers:
+    #     new_peers_dict[ip] = port
+    # additional_peer_connections: dict[peers_handler.Peer, socket.socket] = client_peer.perform_handshakes(new_peers_dict)
+    #
+    # # COMPLETE PEER LIST THAT THE PROGRAM WILL BE WORKING WITH
+    # peer_connections: dict[peers_handler.Peer, socket.socket] = peer_connections | additional_peer_connections
+    # print("Handshaked some more")
+    #
+    # if old_connections == peer_connections:
+    #     print("NOTHING CHANGED!")
 
     pprint(peer_connections)
 
@@ -80,7 +80,7 @@ def main():
     print("Got bitfield")
 
     # DOWNLOADING PROCESS
-    client_peer.download_process(num_pieces, piece_length, peer_connections)
+    client_peer.download_process(num_pieces, piece_length, peer_connections, torrent_info)
 
 
 
