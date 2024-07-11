@@ -4,7 +4,6 @@ import struct
 import socket
 import time
 from hashlib import sha1
-from pprint import pprint
 
 
 
@@ -23,6 +22,9 @@ class Bittorrent_Constants:
     BLOCK_LENGTH = 2 ** 14  # Can be changed, but works best at this value.
 
 
+DOWNLOAD_PERCENTAGE: int = 0
+
+
 class Index:
     def __init__(self, val):
         self.value = val
@@ -38,14 +40,13 @@ class Peer:
         self.bitfield: (None, bytearray) = None
         self.choking: bool = True
         self.being_used: bool = False
+        self.strikes: int = 0
 
 
     @staticmethod
     def validate_piece(piece_data: bytes, piece_index: int, pieces_hash: bytes):
         piece_hash = sha1(piece_data).digest()
         expected_hash = pieces_hash[piece_index*20:(piece_index+1)*20]
-        print(f"{piece_hash=}")
-        print(f"{expected_hash=}")
         return piece_hash == expected_hash
 
     @staticmethod
@@ -73,15 +74,20 @@ class Peer:
         sock.sendall(message)
 
 
-    def await_unchoke(self, sock: socket.socket, piece_index: int, begin: int, length: int):
+    def await_unchoke(self, sock: socket.socket, piece_index: int, begin: int, length: int,
+                      cancel_event: threading.Event, pause_event: threading.Event):
         while True:
+            if cancel_event.is_set():
+                return 0
+            while pause_event.is_set():
+                time.sleep(1)
             time.sleep(5)
             self.send_request(sock, piece_index, begin, length)
             basic_header_len = 4 + 1
             basic_header = sock.recv(basic_header_len)
             response_length, response_id = struct.unpack(">IB", basic_header)
             if response_id == Bittorrent_Constants.UNCHOKE:
-                break
+                return 1
 
     @staticmethod
     def bitfield_counter_map(peers: list['Peer'], num_pieces: int) -> list[int]:  # Counter hashmap of the bitfields
@@ -222,26 +228,42 @@ class Peer:
             thread.join()
 
 
-    def download_process(self, num_pieces: int, piece_length: int, available_peers: dict['Peer', socket.socket], torrent_info: dict):
+    def download_process(self, num_pieces: int, piece_length: int, available_peers: dict['Peer', socket.socket],
+                         torrent_info: dict, selected_dir: str, size: int,
+                         cancel_event: threading.Event, pause_event: threading.Event):
         # ASCENDING ORDER LIST OF INDEXES, ALLOWS FOR RAREST PIECE SELECTION
         bitfield_counter_map: list[int] = self.bitfield_counter_map(list(available_peers.keys()), num_pieces)
         sorted_indexes: list[int] = sorted(range(len(bitfield_counter_map)), key=lambda x: bitfield_counter_map[x])
         piece_statuses: list[Index] = list(Index(ind) for ind in sorted_indexes)
+        piece_stati_enum = enumerate(piece_statuses)
         print("Beginning download process...")
         acquire_piece_lock = threading.Lock()
         write_data_lock = threading.Lock()
+        pieces_downloaded = 0
+
+        if 'files' not in torrent_info.keys():
+            files = [{'length': torrent_info['length'],
+                      'path': os.path.join(selected_dir, torrent_info['name'])}]
+        else:
+            files = [{'length': torrent_file['length'],
+                      'path': os.path.join(selected_dir, r'\\'.join(torrent_file['path']))}
+                     for torrent_file in torrent_info['files']]
 
         def download_piece(conn: socket.socket, piece_size):
-            acquire_piece_lock.acquire()
-            # region SELECT PIECE AND PEER
+            nonlocal pieces_downloaded
+            acquire_piece_lock.acquire()            # region SELECT PIECE AND PEER
             unavailable_pieces = []
             while True:
+                if cancel_event.is_set():
+                    return
+                while pause_event.is_set():
+                    time.sleep(1)
                 piece_index: int = -1
                 index_of_index: int = -1
-                for index in piece_statuses:
-                    index_of_index += 1
+                for ioi, index in piece_stati_enum:
                     if index.status == "Absent" and index.value not in unavailable_pieces:
                         piece_index = index.value
+                        index_of_index = ioi
                         break
                 if piece_index == -1:
                     acquire_piece_lock.release()
@@ -253,6 +275,7 @@ class Peer:
                         target_peer = p
                         p.being_used = True
                         piece_statuses[index_of_index].status = "Downloading"
+                        print(f"{piece_index}, WHICH IS AT {index_of_index}, IS DOWNLOADING.")
                         break
                 if target_peer is not None:
                     break
@@ -268,75 +291,132 @@ class Peer:
             begin_offset: int = 0
             len_prefix_len = 4
             need_to_send = True
-            while len(piece_data) < piece_size:
-                if need_to_send:
-                    requesting_block_length = min(Bittorrent_Constants.BLOCK_LENGTH, piece_size - len(piece_data))
-                    self.send_request(conn, piece_index, begin_offset, requesting_block_length)
-                len_prefix = int.from_bytes(conn.recv(len_prefix_len), byteorder="big")
-                if len_prefix == 0:     # KEEP ALIVE MESSAGE
-                    need_to_send = False
-                    continue
-                response_id = int.from_bytes(conn.recv(1), byteorder="big")
-                need_to_send = True
-
-
-                match response_id:
-                    case Bittorrent_Constants.PIECE:
-                        data = self.recv_all(conn, len_prefix - 1)
-                        response_index, response_offset = struct.unpack(">II", data[:8])
-                        try:
-                            assert response_index == piece_index
-                            assert response_offset == begin_offset
-                        except AssertionError:
+            is_valid = False
+            while not is_valid:
+                try:
+                    start_time = time.time()
+                    while len(piece_data) < piece_size:
+                        if cancel_event.is_set():
+                            return
+                        while pause_event.is_set():
+                            time.sleep(1)
+                        if need_to_send:
+                            requesting_block_length = min(Bittorrent_Constants.BLOCK_LENGTH, piece_size - len(piece_data))
+                            self.send_request(conn, piece_index, begin_offset, requesting_block_length)
+                        len_prefix = int.from_bytes(conn.recv(len_prefix_len), byteorder="big")
+                        if len_prefix == 0:     # KEEP ALIVE MESSAGE
+                            need_to_send = False
+                            if time.time() - start_time > 10:
+                                need_to_send = True
                             continue
-                        block = data[8:]
-                        piece_data += block
-                        begin_offset += Bittorrent_Constants.BLOCK_LENGTH
-                    case Bittorrent_Constants.CHOKE:
-                        self.await_unchoke(conn, piece_index, begin_offset, Bittorrent_Constants.BLOCK_LENGTH)
-                    case Bittorrent_Constants.HAVE:
-                        new_index = int.from_bytes(conn.recv(len_prefix - 1), byteorder="big")
-                        target_peer.bitfield[new_index] = 1
-                    case Bittorrent_Constants.UNCHOKE:
-                        need_to_send = False
-                        continue
+                        response_id = int.from_bytes(conn.recv(1), byteorder="big")
+                        need_to_send = True
 
-            piece_statuses[index_of_index].status = "Downloaded"
-            target_peer.being_used = False            # MARKING PIECE COMPLETED AND FREEING PEER
-            print(f"VALIDATING PIECE #{piece_index}... {self.validate_piece(piece_data, piece_index, torrent_info['pieces'])}")
-            return piece_index, piece_data
-            # endregion
+
+                        match response_id:
+                            case Bittorrent_Constants.PIECE:
+                                data = self.recv_all(conn, len_prefix - 1)
+                                response_index, response_offset = struct.unpack(">II", data[:8])
+                                try:
+                                    assert response_index == piece_index
+                                    assert response_offset == begin_offset
+                                except AssertionError:
+                                    continue
+                                block = data[8:]
+                                piece_data += block
+                                begin_offset += Bittorrent_Constants.BLOCK_LENGTH
+                            case Bittorrent_Constants.CHOKE:
+                                if not self.await_unchoke(conn, piece_index, begin_offset,
+                                                          Bittorrent_Constants.BLOCK_LENGTH, cancel_event, pause_event):
+                                    return
+                            case Bittorrent_Constants.HAVE:
+                                new_index = int.from_bytes(conn.recv(len_prefix - 1), byteorder="big")
+                                target_peer.bitfield[new_index] = 1
+                            case Bittorrent_Constants.UNCHOKE:
+                                need_to_send = False
+                                continue
+                except (TimeoutError, ConnectionResetError, ConnectionError,
+                        ValueError, IndexError, OSError, struct.error):
+                    target_peer.being_used = False
+                    write_data_lock.acquire()
+                    piece_statuses[index_of_index].status = "Absent"
+                    write_data_lock.release()
+                    time.sleep(1)
+                    continue
+
+                is_valid = self.validate_piece(piece_data, piece_index, torrent_info['pieces'])
+                target_peer.being_used = False
+
+                print(f"VALIDATING PIECE #{piece_index}... {is_valid}")
+                write_data_lock.acquire()
+                if is_valid:
+                    pieces_downloaded += 1
+                    piece_statuses[index_of_index].status = "Downloaded"
+                    write_data_lock.release()
+                    return piece_index, piece_data
+
+                piece_statuses[index_of_index].status = "Absent"
+                write_data_lock.release()
+                target_peer.strikes += 1
+                if target_peer.strikes >= 20:
+                    target_peer.being_used = True
+                    return
+                # endregion
 
         def download_all_pieces(conn: socket.socket):
             # region WRITE TO FILE
+            nonlocal files
+            nonlocal pieces_downloaded
 
-            selected_dir = r"C:\Users\mensc\Downloads\Torrent_Tests"
-            match 'files' not in torrent_info.keys():
-                case True:
-                    # SINGLE FILE TORRENT
-                    file_name = torrent_info['name']
-                    file_path = os.path.join(selected_dir, file_name)
-                    total_size = torrent_info['length']
+            for file in files:
+                with open(file['path'], 'w') as _:  # CREATE EMPTY FILE
+                    pass
 
-                    with open(file_path, 'w') as _:  # CREATE EMPTY FILE
-                        pass
+            while (size_of_download := sum(os.path.getsize(file['path']) for file in files)) < size:
+                if cancel_event.is_set():
+                    return
+                while pause_event.is_set():
+                    time.sleep(1)
+                actual_piece_size = min(piece_length, size - size_of_download)
+                print(f"{torrent_info['name']} is at {(pieces_downloaded/num_pieces)*100}%")
+                try:
+                    time.sleep(1)
+                    piece_index, piece_data = download_piece(conn, actual_piece_size)
+                except TypeError:  # RETURNING NONE = NO MORE PIECES TO DOWNLOAD
+                    return
 
-                    while (size_of_download := os.path.getsize(file_path)) < total_size:
-                        actual_piece_size = min(piece_length, total_size - size_of_download)
-                        print(f"{file_name} is at {(size_of_download/total_size)*100}%")
-                        try:
-                            time.sleep(1)
-                            piece_index, piece_data = download_piece(conn, actual_piece_size)
-                        except TypeError:  # RETURNING NONE = NO MORE PIECES TO DOWNLOAD
-                            return
-                        offset = piece_index * piece_length
+                piece_offset: int = piece_index * piece_length
+                remaining_data: bytes = piece_data
 
-                        write_data_lock.acquire()
-                        with open(file_path, 'r+b') as file:
-                            file.seek(offset)
-                            file.write(piece_data)
-                        write_data_lock.release()
+                for file in files:  # FILE SELECTION
+                    file_length = file['length']
+                    if piece_offset >= file_length:
+                        piece_offset -= file_length
+                        continue
 
+                    bytes_to_write = min(file_length - piece_offset, len(remaining_data))
+                    write_data_lock.acquire()
+                    with open(file['path'], 'r+b') as f:
+                        f.seek(piece_offset)
+                        f.write(remaining_data[:bytes_to_write])
+                    write_data_lock.release()
+                    remaining_data = remaining_data[bytes_to_write:]
+                    piece_offset = 0  # RESET FOR SUBSEQUENT FILES
+
+                    if not remaining_data:
+                        break
+            cancel_event.set()     # CANCEL EVENT USED TO SIGNAL THE DOWNLOAD PROCESS HAS FINISHED.
+
+        def keep_aliver():
+            conns = available_peers.values()
+            length_prefix: int = 0
+            keep_alive: bytes = struct.pack(">I", length_prefix)
+            while True:
+                if cancel_event.is_set():
+                    return
+                for conn in conns:
+                    conn.send(keep_alive)
+                time.sleep(10)
 
 
         downloader_threads = []
@@ -344,6 +424,11 @@ class Peer:
             thread = threading.Thread(target=download_all_pieces, args=[sock])
             downloader_threads.append(thread)
             thread.start()
+        keep_alive_thread = threading.Thread(target=keep_aliver, args=[])
+        downloader_threads.append(keep_alive_thread)
+        keep_alive_thread.start()
 
         for thread in downloader_threads:
             thread.join()
+
+        print("Process Finished.")

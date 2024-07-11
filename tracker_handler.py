@@ -1,6 +1,6 @@
 import socket
 import urllib.parse
-
+import threading
 import requests
 import struct
 from random import randint
@@ -8,13 +8,15 @@ from bcoding import bdecode
 
 
 class Tracker:        # SIMPLE TRACKER INTERFACE, ONLY HAS THE BASIC ATTRIBUTES THAT OTHER VARIATIONS EXPAND ON
-    def __init__(self, info_hash: bytes, size: int, unique_id: str, tracker_hn: str, downloaded: int):
+    def __init__(self, info_hash: bytes, size: int, unique_id: str, tracker_hn: str, downloaded: int,
+                 lock: threading.Lock):
         self.info_hash: bytes = info_hash
         self.peer_id: bytes = unique_id.encode()
         self.size: int = size
         self.downloaded: int = downloaded
         self.interval: int = 0  # Placeholder integer
         self.tracker_hostname = tracker_hn
+        self.lock = lock
 
 
     def peers_request(self) -> dict:
@@ -28,8 +30,9 @@ class Tracker:        # SIMPLE TRACKER INTERFACE, ONLY HAS THE BASIC ATTRIBUTES 
 
 
 class HTTP_Tracker(Tracker):   # TRACKER ACCORDING TO THE HTTP VARIATION OF THE PROTOCOL
-    def __init__(self, tracker_url: str, info_hash: bytes, size: int, unique_id: str, ip_address: str, downloaded: int):
-        super().__init__(info_hash, size, unique_id, tracker_url, downloaded)
+    def __init__(self, tracker_url: str, info_hash: bytes, size: int, unique_id: str, ip_address: str, downloaded: int,
+                 lock: threading.Lock):
+        super().__init__(info_hash, size, unique_id, tracker_url, downloaded, lock)
         self.ip: str = ip_address
         self.port: int = 6881
 
@@ -53,7 +56,7 @@ class HTTP_Tracker(Tracker):   # TRACKER ACCORDING TO THE HTTP VARIATION OF THE 
                 tracker_response: bytes = response.content
 
                 peer_dict: dict = {}
-                tracker_response = bdecode(tracker_response)
+                tracker_response: dict = bdecode(tracker_response)
                 if type(tracker_response['peers']) != list:
                     offset: int = 0
 
@@ -114,8 +117,9 @@ class HTTP_Tracker(Tracker):   # TRACKER ACCORDING TO THE HTTP VARIATION OF THE 
 
 
 class UDP_Tracker(Tracker):      # TRACKER ACCORDING TO THE UDP VARIATION OF THE PROTOCOL
-    def __init__(self, tracker_url: urllib.parse.ParseResult, info_hash: bytes, size: int, unique_id: str, downloaded: int):
-        super().__init__(info_hash, size, unique_id, tracker_url.hostname, downloaded)
+    def __init__(self, tracker_url: urllib.parse.ParseResult, info_hash: bytes, size: int,
+                 unique_id: str, downloaded: int, lock: threading.Lock):
+        super().__init__(info_hash, size, unique_id, tracker_url.hostname, downloaded, lock)
         self.ip: int = 0
         self.port: int = tracker_url.port
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)  # DGRAM - UDP. STREAM - TCP
@@ -158,12 +162,13 @@ class UDP_Tracker(Tracker):      # TRACKER ACCORDING TO THE UDP VARIATION OF THE
                 raise Exception("Invalid announce response")
 
             peers_dict = {}
-            for i in range(20, len(response), 6): # UNPACKS THE COMPACT BYTE LIST OF THE PEERS
+            for i in range(20, len(response), 6):  # UNPACKS THE COMPACT BYTE LIST OF THE PEERS
                 ip = struct.unpack("!I", response[i:i + 4])[0]
                 port = struct.unpack("!H", response[i + 4:i + 6])[0]
                 peers_dict[(socket.inet_ntoa(struct.pack("!I", ip)))] = port
 
             self.interval = interval
+
             return peers_dict
 
         except socket.error:
@@ -197,9 +202,14 @@ class UDP_Tracker(Tracker):      # TRACKER ACCORDING TO THE UDP VARIATION OF THE
 
 
 def announce_to_peers(announce_list: list[str, list[str]], info_hash: bytes,
-                      size: int, unique_id: str, ip_address: str, downloaded: int) -> (bytes, str):
+                      size: int, unique_id: str, ip_address: str, downloaded: int) -> (dict, Tracker):
 
-    for tracker_url in announce_list:
+    lock: threading.Lock = threading.Lock()
+    peers_dict: dict = {}
+    trackers: list = []
+
+    def announce_to_peers_wrapper(tracker_url: (str, list[str], lock)):
+        nonlocal  peers_dict
         if type(tracker_url) is list:
             parsed_url = urllib.parse.urlparse(tracker_url[0])
         else:
@@ -207,17 +217,31 @@ def announce_to_peers(announce_list: list[str, list[str]], info_hash: bytes,
 
         if parsed_url.scheme in ['udp']:
             try:
-                Tracker_Conn: Tracker = UDP_Tracker(parsed_url, info_hash, size, unique_id, downloaded)
-                peers_dict = Tracker_Conn.peers_request()
-                return peers_dict, Tracker_Conn
+                Tracker_Conn: Tracker = UDP_Tracker(parsed_url, info_hash, size, unique_id, downloaded, lock)
+                tracker_peers = Tracker_Conn.peers_request()
+                lock.acquire()
+                peers_dict = peers_dict | tracker_peers
+                trackers.append(Tracker_Conn)
+                lock.release()
             except (socket.timeout, socket.gaierror):
-                continue
+                return
 
         if parsed_url.scheme in ['http']:
-            Tracker_Conn: Tracker = HTTP_Tracker(tracker_url, info_hash, size, unique_id, ip_address, downloaded)
-            peers_dict = Tracker_Conn.peers_request()
-            if peers_dict == {}:
-                continue
-            return peers_dict, Tracker_Conn
+            Tracker_Conn: Tracker = HTTP_Tracker(tracker_url, info_hash, size, unique_id, ip_address, downloaded, lock)
+            tracker_peers = Tracker_Conn.peers_request()
+            lock.acquire()
+            peers_dict = peers_dict | tracker_peers
+            trackers.append(Tracker_Conn)
+            lock.release()
 
 
+    announce_threads = []
+    for url in announce_list:
+        thread = threading.Thread(target=announce_to_peers_wrapper, args=[url])
+        announce_threads.append(thread)
+        thread.start()
+
+    for thread in announce_threads:
+        thread.join()
+
+    return peers_dict, trackers
