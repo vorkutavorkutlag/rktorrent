@@ -2,24 +2,16 @@ import socket
 import threading
 import time
 
-import requests
 from bcoding import bdecode, bencode
 from hashlib import sha1
 from math import ceil
-from uuid import uuid4
 from pprint import pprint
+from typing import Callable
 
 import peers_handler
 import tracker_handler
 
-MAX_PEERS = 10
-version: str = "0090"
-IP_ADDRESS: str = requests.get('https://api.ipify.org').content.decode('utf8')
-client_prefix = "RK-" + version + "-"
-random_suffix = uuid4().hex[:12]
-combined_id = client_prefix + random_suffix
-UNIQUE_CLIENT_ID: str = combined_id[:20]
-# 20 BYTE CLIENT ID, UNIQUE FOR EVERY INSTANCE OF THE PROGRAM
+MAX_PEERS = 40
 
 
 def read_torrent(path: str) -> (dict, str, int):  # READS TORRENT FILE, EXTRACTS IMPORTANT DATA
@@ -43,11 +35,14 @@ def read_torrent(path: str) -> (dict, str, int):  # READS TORRENT FILE, EXTRACTS
 
 
 
-def run(selected_dir: str, selected_torrent: str, cancel_event: threading.Event, pause_event: threading.Event) -> None:
+def run(selected_dir: str, selected_torrent: str,
+        cancel_event: threading.Event, pause_event: threading.Event, update: Callable,
+        IP_ADDRESS, UNIQUE_CLIENT_ID) -> None:
     # CALLS THE READ TORRENT FUNCTION, GETS IMPORTANT INFO
+    update(0, "Reading file...", 0)
     announce_list, piece_length, info_hash, size, num_pieces, torrent_info = read_torrent(selected_torrent)
 
-    print("Read file")
+    update(0, "Communicating with tracker server...", 0)
     # FINDS A STABLE CONNECTION WITH A TRACKER, REQUESTS PEER INFO
     handler_response = \
         tracker_handler.announce_to_peers(announce_list, info_hash, size, UNIQUE_CLIENT_ID, IP_ADDRESS, 0)
@@ -58,6 +53,13 @@ def run(selected_dir: str, selected_torrent: str, cancel_event: threading.Event,
     print("Got tracker response")
     print(peers_dict)
 
+    if cancel_event.is_set():
+        return
+    while pause_event.is_set():
+        time.sleep(1)
+
+    update(0, "Handshaking with peers...", 0)
+
     # DOES HANDSHAKES WITH PEERS, FINDS OUT WHICH PEERS ARE AVAILABLE. !! KEEPS CONNECTION OPEN VIA SOCKET !!
     client_peer: peers_handler.Peer = peers_handler.Peer(UNIQUE_CLIENT_ID, info_hash, "localhost", 0)
     peer_connections = {}
@@ -67,7 +69,8 @@ def run(selected_dir: str, selected_torrent: str, cancel_event: threading.Event,
             return
         while pause_event.is_set():
             time.sleep(1)
-        peer_connections: dict[peers_handler.Peer, socket.socket] = client_peer.perform_handshakes(peers_dict)
+        peer_connections: dict[peers_handler.Peer, socket.socket] = client_peer.perform_handshakes(peers_dict,
+                            cancel_event=cancel_event, pause_event=pause_event)
 
     print("Handshaked")
     # old_connections = peer_connections
@@ -95,10 +98,17 @@ def run(selected_dir: str, selected_torrent: str, cancel_event: threading.Event,
 
     pprint(peer_connections)
 
+    if cancel_event.is_set():
+        return
+    while pause_event.is_set():
+        time.sleep(1)
+
+    update(0, "Getting bitfields...", 0)
     client_peer.send_all_interested(peer_connections)
 
-    print("Got bitfield")
+
+    update(0, "Beginning download process...", 0)
 
     # DOWNLOADING PROCESS
     client_peer.download_process(num_pieces, piece_length, peer_connections,
-                                 torrent_info, selected_dir, size, cancel_event, pause_event)
+                                 torrent_info, selected_dir, size, cancel_event, pause_event, update)

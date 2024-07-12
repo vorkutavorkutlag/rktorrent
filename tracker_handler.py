@@ -209,7 +209,7 @@ def announce_to_peers(announce_list: list[str, list[str]], info_hash: bytes,
     trackers: list = []
 
     def announce_to_peers_wrapper(tracker_url: (str, list[str], lock)):
-        nonlocal  peers_dict
+        nonlocal peers_dict
         if type(tracker_url) is list:
             parsed_url = urllib.parse.urlparse(tracker_url[0])
         else:

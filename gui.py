@@ -1,11 +1,15 @@
 import base64
 import tkinter as tk
-from tkinter import filedialog, ttk, messagebox
 import json
 import bcoding
 import os
-import main  # Import the main module
 import threading
+from datetime import timedelta
+from requests import get
+from uuid import uuid4
+from tkinter import filedialog, ttk, messagebox
+
+import main  # Import the main module
 
 
 def upload_file():
@@ -116,11 +120,8 @@ def start_download(save_directory, file_path, edit_button, download_button, dele
     control_frame = tk.Frame(content_frame)
     control_frame.pack(fill='x', padx=10, pady=5)
 
-    # Create label for "Collecting peers..."
-    collecting_label = tk.Label(control_frame, text="Collecting peers...", anchor="w")
-    collecting_label.pack(side='left', padx=5)
-
-
+    state_label = tk.Label(control_frame, text="Collecting peers...", anchor="w")
+    state_label.pack(side='left', padx=5)
 
     # Create "Cancel" button
     pause_event = threading.Event()
@@ -137,11 +138,9 @@ def start_download(save_directory, file_path, edit_button, download_button, dele
         progress_bar.destroy()
         control_frame.destroy()
 
-    # Create "Pause" button (non-functional)
     pause_button = tk.Button(control_frame, text="Pause", command=pause_download)
     pause_button.pack(side='left', padx=5)
 
-    # Create "Resume" button (non-functional)
     resume_button = tk.Button(control_frame, text="Resume", command=resume_download)
     resume_button.pack(side='left', padx=5)
 
@@ -149,12 +148,32 @@ def start_download(save_directory, file_path, edit_button, download_button, dele
     cancel_button.pack(side='left', padx=5)
 
     # Create a progress bar
-    progress_bar = ttk.Progressbar(content_frame, orient='horizontal', mode='indeterminate')
+    progress_bar = ttk.Progressbar(content_frame, orient='horizontal')
     progress_bar.pack(fill='x', padx=10, pady=5)
+    percentage_label = tk.Label(control_frame, text="0%")
+    percentage_label.pack(pady=10)
+    time_elapsed_label = tk.Label(control_frame, text="Elapsed Time: 0 seconds")
+    time_elapsed_label.pack(pady=10)
+    estimated_time_left = tk.Label(control_frame, text="Estimated Time left: 0 seconds")
+    estimated_time_left.pack(pady=10)
+
+    def chop_microseconds(delta):
+        return delta - timedelta(microseconds=delta.microseconds)
+
+    def update(percent_value: int, state: str, time_elapsed: int):
+        percent_value = percent_value
+        progress_bar['value'] = percent_value
+        percentage_label.config(text=f"{percent_value}%")
+        state_label.config(text=f"{state}")
+        time_elapsed_label.config(text=f"Elapsed Time: {chop_microseconds(timedelta(seconds=time_elapsed))}")
+        estimated_time_left_calc = chop_microseconds(timedelta(seconds=
+                                                            ((100 - percent_value)*time_elapsed)/(percent_value+0.1)))
+        estimated_time_left.config(text=f"Estimated Time left: {estimated_time_left_calc}")
+
 
     try:
-        # Run main.run() in the thread
-        main.run(save_directory, file_path, cancel_event, pause_event)
+        # RUN TORRENT DOWNLOAD IN A THREAD
+        main.run(save_directory, file_path, cancel_event, pause_event, update, IP_ADDRESS, UNIQUE_CLIENT_ID)
 
         if cancel_event.is_set():
             try:
@@ -167,6 +186,7 @@ def start_download(save_directory, file_path, edit_button, download_button, dele
             except OSError:
                 print("Error occurred while deleting files.")
         else:
+            cancel_download()
             messagebox.showinfo("Info", "Torrent content successfully installed")
         # Cleanup after download completes or is cancelled
 
@@ -184,37 +204,40 @@ def delete_file_frame(file_frame):
     file_frame.destroy()
 
 
-# Create the main window
-root = tk.Tk()
-root.title("RK-Torrent")  # Set the title to "RK-Torrent"
+if __name__ == '__main__':
+    version: str = "0100"
+    IP_ADDRESS: str = get('https://api.ipify.org').content.decode('utf8')
+    client_prefix = "RK-" + version + "-"
+    random_suffix = uuid4().hex[:12]
+    combined_id = client_prefix + random_suffix
+    UNIQUE_CLIENT_ID: str = combined_id[:20]
+    # 20 BYTE CLIENT ID, UNIQUE FOR EVERY INSTANCE OF THE PROGRAM
 
-# Calculate the position to start the window in the middle of the screen
-window_width = 1300
-window_height = 650
+    # CREATE MAIN WINDOW
+    root = tk.Tk()
+    root.title("RK-Torrent")  # Set the title to "RK-Torrent"
 
-screen_width = root.winfo_screenwidth()
-screen_height = root.winfo_screenheight()
+    window_width = 1300
+    window_height = 650
+    screen_width = root.winfo_screenwidth()
+    screen_height = root.winfo_screenheight()
+    x_position = int((screen_width - window_width) / 2)
+    y_position = int((screen_height - window_height) / 2)
+    root.geometry(f"{window_width}x{window_height}+{x_position}+{y_position}")
 
-x_position = int((screen_width - window_width) / 2)
-y_position = int((screen_height - window_height) / 2)
+    # CREATE TOP FRAME FOR BUTTON
+    top_frame = tk.Frame(root)
+    top_frame.pack(fill='x', pady=10)
+    upload_button = tk.Button(top_frame, text="Upload File", command=upload_file)
+    upload_button.pack(side='left', padx=10)
 
-root.geometry(f"{window_width}x{window_height}+{x_position}+{y_position}")
+    # SEPARATOR LINE
+    separator = ttk.Separator(root, orient='horizontal')
+    separator.pack(fill='x', pady=5)
 
-# Create a top frame for the upload button
-top_frame = tk.Frame(root)
-top_frame.pack(fill='x', pady=10)
+    # CREATE FRAME FOR CONTENT
+    content_frame = tk.Frame(root)
+    content_frame.pack(fill='both', expand=True, padx=10)
 
-# Create the upload button and place it in the top left corner
-upload_button = tk.Button(top_frame, text="Upload File", command=upload_file)
-upload_button.pack(side='left', padx=10)
-
-# Create a separator line
-separator = ttk.Separator(root, orient='horizontal')
-separator.pack(fill='x', pady=5)
-
-# Create a frame to hold the content (uploaded file labels and buttons)
-content_frame = tk.Frame(root)
-content_frame.pack(fill='both', expand=True, padx=10)
-
-# Run the Tkinter event loop
-root.mainloop()
+    # RUN LOOP
+    root.mainloop()
