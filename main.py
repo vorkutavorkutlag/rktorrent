@@ -92,7 +92,7 @@ def tracker_comm(tracker: tracker_handler.Tracker, cancel_event: threading.Event
                     return
                 time.sleep(5)
             tracker.inform_tracker_download()
-        except (requests.exceptions.InvalidSchema, TimeoutError):
+        except (requests.exceptions.InvalidSchema, requests.exceptions.HTTPError, TimeoutError):
             return
 
 
@@ -123,23 +123,6 @@ def run_continuation(selected_dir: str, info_hash: bytes, peers_dict: dict, num_
                             cancel_event=cancel_event, pause_event=pause_event)
         time.sleep(1)
 
-
-    # old_connections = peer_connections
-    #
-    # # SEARCHES FOR ADDITIONAL PEERS USING DHT, THEN CHECKS AVAILABILITY OF THOSE PEERS
-    # new_peers: set = client_peer.find_all_additional_peers(peer_connections)
-    # new_peers_dict = {}
-    # for ip, port in new_peers:
-    #     new_peers_dict[ip] = port
-    # additional_peer_connections: dict[peers_handler.Peer,
-    # socket.socket] = client_peer.perform_handshakes(new_peers_dict)
-    #
-    # # COMPLETE PEER LIST THAT THE PROGRAM WILL BE WORKING WITH
-    # peer_connections: dict[peers_handler.Peer, socket.socket] = peer_connections | additional_peer_connections
-    # print("Handshake some more")
-    #
-    # if old_connections == peer_connections:
-    #     print("NOTHING CHANGED!")
 
     # MAKES SURE WE ARE CONTACTING MO MORE THAN MAX_PEERS PEERS
     if len(peer_connections) > MAX_PEERS:

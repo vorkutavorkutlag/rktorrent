@@ -172,32 +172,6 @@ class Peer:
 
         return peer_connections
 
-    def find_all_additional_peers(self, available_peers: dict['Peer', socket.socket]) -> set:
-        # ADDS MULTITHREADING TO THE FIND ADDITIONAL PEERS FUNCTION
-        # CONTACTS ALL CURRENT AVAILABLE PEERS
-        # RETURNS PEER OBJECTS AND SOCKET CONNECTIONS
-        # MOST MIGHT NOT BE AVAILABLE, BUT THE TIME SPENT ON MAKING SURE IS WORTH IT IF WE DO FIND MORE PEERS
-        all_new_peers: set = set()
-        lock: threading.Lock = threading.Lock()
-
-        def find_peers_wrapper(conn: socket.socket) -> None:
-            new_peers = self.send_peers_request(conn)
-            if new_peers is not None:
-                lock.acquire()
-                nonlocal all_new_peers
-                all_new_peers = all_new_peers.union(new_peers)
-                lock.release()
-
-        threads: list[threading.Thread] = []
-        for sock in available_peers.values():
-            thread: threading.Thread = threading.Thread(target=find_peers_wrapper, args=[sock])
-            threads.append(thread)
-            thread.start()
-
-        for thread in threads:
-            thread.join()
-
-        return all_new_peers
 
     def send_all_interested(self, available_peers: dict['Peer', socket.socket]) -> None:
         response_length: int = 5  # 4 - length, 1 - ID
@@ -268,6 +242,8 @@ class Peer:
         bitfield_counter_map: list[int] = self.bitfield_counter_map(list(available_peers.keys()), num_pieces)
         sorted_indexes: list[int] = sorted(range(len(bitfield_counter_map)), key=lambda x: bitfield_counter_map[x])
         piece_statuses: list[Index] = list(Index(ind) for ind in sorted_indexes)
+
+        endgame_enabled: bool = len(available_peers) > 5       # WITH LOW PEER AMOUNTS, ENDGAME CAN HARM THE PROCESS
 
         acquire_piece_lock: threading.Lock = threading.Lock()
         write_data_lock: threading.Lock = threading.Lock()
@@ -358,7 +334,8 @@ class Peer:
                                     assert response_index == piece_index
                                     assert response_offset == begin_offset
                                 except AssertionError:
-                                    if (pieces_downloaded / num_pieces) * 100 > 99.5:  # FILTERS BAD PEERS AT ENDGAME
+                                    # FILTERS BAD PEERS AT ENDGAME
+                                    if (pieces_downloaded / num_pieces) * 100 > 99.5 and endgame_enabled:
                                         return
                                     continue
                                 block = data[8:]
@@ -381,7 +358,8 @@ class Peer:
                     write_data_lock.acquire()
                     piece_statuses[index_of_index].status = "Absent"
                     write_data_lock.release()
-                    if (pieces_downloaded / num_pieces) * 100 > 99.5:  # FILTERS BAD PEERS AT ENDGAME
+                    # FILTERS BAD PEERS AT ENDGAME
+                    if (pieces_downloaded / num_pieces) * 100 > 99.5 and endgame_enabled:
                         return
                     time.sleep(1)
                     continue
@@ -399,7 +377,8 @@ class Peer:
                 piece_statuses[index_of_index].status = "Absent"
                 write_data_lock.release()
                 target_peer.strikes += 1
-                if (pieces_downloaded / num_pieces) * 100 > 99.5:  # FILTERS BAD PEERS AT ENDGAME
+                # FILTERS BAD PEERS AT ENDGAME
+                if (pieces_downloaded / num_pieces) * 100 > 99.5 and endgame_enabled:
                     return
                 if target_peer.strikes >= 20:
                     unavailable_pieces.append(piece_index)
