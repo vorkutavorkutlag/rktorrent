@@ -20,10 +20,16 @@ class Tracker:        # SIMPLE TRACKER INTERFACE, ONLY HAS THE BASIC ATTRIBUTES 
     def peers_request(self) -> dict:
         return {}
 
-    def inform_tracker(self, event: str) -> None:
+    def inform_tracker(self, _: int) -> None:
         return None
 
-    def finish(self) -> None:
+    def inform_tracker_download(self) -> None:
+        return None
+
+    def finish_comm(self) -> None:
+        return None
+
+    def close_gracefully(self) -> None:
         return None
 
 
@@ -107,22 +113,31 @@ class HTTP_Tracker(Tracker):   # TRACKER ACCORDING TO THE HTTP VARIATION OF THE 
         response: requests.Response = requests.get(self.tracker_hostname, params=params, timeout=5)
         response.raise_for_status()
 
-    def finish(self) -> None:
-        event = "completed"
-        self.downloaded = self.size
-        self.inform_tracker(event)
+    def inform_tracker_download(self) -> None:
+        if self.downloaded == self.size:
+            self.finish_comm()
+            return
+        self.inform_tracker("started")
+
+    def finish_comm(self) -> None:
+        self.inform_tracker("completed")
+
+    def close_gracefully(self) -> None:
+        self.inform_tracker("stopped")
 
 
 class UDP_Tracker(Tracker):      # TRACKER ACCORDING TO THE UDP VARIATION OF THE PROTOCOL
     def __init__(self, tracker_url: urllib.parse.ParseResult, info_hash: bytes, size: int,
                  unique_id: str, downloaded: int):
         super().__init__(info_hash, size, unique_id, tracker_url.hostname, downloaded)
+        self.connection_id = 0
+        self.transaction_id = 0
         self.ip: int = 0
         self.port: int = tracker_url.port
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)  # DGRAM - UDP. STREAM - TCP
         self.socket.settimeout(5)
 
-    def connection_request(self) -> tuple[int, int]:     # REQUESTS CONNECTION ACCORDING TO THE PROTOCOL
+    def connection_request(self) -> None:     # REQUESTS CONNECTION ACCORDING TO THE PROTOCOL
         connection_id: int = 0x41727101980  # MAGIC CONSTANT FOR PROTOCOL
         action: int = 0  # CONNECT ACTION
         transaction_id: int = randint(0, 65535)
@@ -136,17 +151,18 @@ class UDP_Tracker(Tracker):      # TRACKER ACCORDING TO THE UDP VARIATION OF THE
         if res_action != 0 or res_transaction != transaction_id:
             raise Exception("Invalid connection response")
 
-        return connection_id, transaction_id
+        self.connection_id = connection_id
+        self.transaction_id = transaction_id
 
     def peers_request(self) -> dict:
-        connection_id, transaction_id = self.connection_request()
+        self.connection_request()
         action: int = 1  # ANNOUNCE ACTION
         event: int = 2   # STARTED EVENT
         key: int = randint(0, 65535)
         uploaded: int = 0
         num_want: int = -1  # DEFAULT
 
-        packet: bytes = struct.pack("!qii20s20sqqqiiiih", connection_id, action, transaction_id,
+        packet: bytes = struct.pack("!qii20s20sqqqiiiih", self.connection_id, action, self.transaction_id,
                                                         self.info_hash, self.peer_id, self.downloaded,
                                                         self.size-self.downloaded, uploaded, event, self.ip,
                                                         key, num_want, self.port)
@@ -156,7 +172,7 @@ class UDP_Tracker(Tracker):      # TRACKER ACCORDING TO THE UDP VARIATION OF THE
             response, _ = self.socket.recvfrom(4096)
 
             res_action, res_transaction_id, interval, leechers, seeders = struct.unpack("!iiiii", response[:20])
-            if res_action != 1 or res_transaction_id != transaction_id:
+            if res_action != 1 or res_transaction_id != self.transaction_id:
                 raise Exception("Invalid announce response")
 
             peers_dict: dict = {}
@@ -173,14 +189,13 @@ class UDP_Tracker(Tracker):      # TRACKER ACCORDING TO THE UDP VARIATION OF THE
 
     def inform_tracker(self, event: int) -> None:
         # INFORMS TRACKER OF DOWNLOAD PROGRESS WITHOUT NEEDING TO UNPACK PEER INFO
-        connection_id, transaction_id = self.connection_request()
         action = 1  # ANNOUNCE ACTION
         event = event
         key = randint(0, 65535)
         uploaded = 0
         num_want = -1  # DEFAULT
 
-        packet: bytes = struct.pack("!qii20s20sqqqiiiih", connection_id, action, transaction_id,
+        packet: bytes = struct.pack("!qii20s20sqqqiiiih", self.connection_id, action, self.transaction_id,
                                     self.info_hash, self.peer_id, self.downloaded,
                                     self.size - self.downloaded, uploaded, event, self.ip,
                                     key, num_want, self.port)
@@ -191,11 +206,25 @@ class UDP_Tracker(Tracker):      # TRACKER ACCORDING TO THE UDP VARIATION OF THE
         except socket.error:
             pass
 
-    def finish(self) -> None:
-        event = 1
-        self.downloaded = self.size
-        self.inform_tracker(event)
-        self.socket.close()
+    # 3 - STOPPED, 2 - STARTED, 1 - COMPLETED, 0 - NONE
+
+    def inform_tracker_download(self) -> None:
+        try:
+            self.inform_tracker(2)
+        except socket.error:
+            self.socket.close()
+
+    def finish_comm(self) -> None:
+        try:
+            self.inform_tracker(1)
+        except socket.error:
+            self.socket.close()
+
+    def close_gracefully(self) -> None:
+        try:
+            self.inform_tracker(3)
+        except socket.error:
+            self.socket.close()
 
 
 

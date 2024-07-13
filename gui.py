@@ -5,8 +5,6 @@ import bcoding
 import os
 import threading
 from datetime import timedelta
-from requests import get
-from uuid import uuid4
 from tkinter import filedialog, ttk, messagebox
 
 import main
@@ -184,9 +182,7 @@ def start_download(save_directory, file_path, edit_button, download_button, dele
                                 file_path,
                                 cancel_event,
                                 pause_event,
-                                update,
-                                IP_ADDRESS,
-                                UNIQUE_CLIENT_ID)
+                                update)
 
         if cancel_event.is_set():
             try:
@@ -220,17 +216,9 @@ def delete_file_frame(file_frame):
 
 
 if __name__ == '__main__':
-    version: str = "0102"
-    IP_ADDRESS: str = get('https://api.ipify.org').content.decode('utf8')
-    client_prefix = "RK-" + version + "-"
-    random_suffix = uuid4().hex[:12]
-    combined_id = client_prefix + random_suffix
-    UNIQUE_CLIENT_ID: str = combined_id[:20]
-    # 20 BYTE CLIENT ID, UNIQUE FOR EVERY INSTANCE OF THE PROGRAM
-
     # CREATE MAIN WINDOW
     root = tk.Tk()
-    root.title("RK-Torrent")  # Set the title to "RK-Torrent"
+    root.title("RK-Torrent    -       Don't close window without cancelling!")  # Set the title to "RK-Torrent"
 
     window_width = 1300
     window_height = 650

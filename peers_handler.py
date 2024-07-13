@@ -23,6 +23,9 @@ class Bittorrent_Constants:
     BLOCK_LENGTH = 2 ** 14  # Can be changed, but works best at this value.
 
 
+SIZE_OF_DOWNLOAD = 0
+
+
 class Index:
     def __init__(self, val):
         self.value: int = val
@@ -47,9 +50,11 @@ class Peer:
         return piece_hash == expected_hash
 
     @staticmethod
-    def recv_all(conn: socket.socket, length: int) -> bytes:
+    def recv_all(conn: socket.socket, length: int, cancel_event: threading.Event) -> bytes:
         data: bytes = b''
         while len(data) < length:
+            if cancel_event.is_set():
+                return b''
             packet: bytes = conn.recv(length - len(data))
             if not packet:
                 raise ValueError("Connection closed unexpectedly")
@@ -138,6 +143,10 @@ class Peer:
         def perform_handshake_wrapper(ip: str, port: int, conn: socket.socket) -> None:
             response = self.handshake(ip, port, conn)
             lock.acquire()
+            if cancel_event.is_set():
+                return
+            while pause_event.is_set():
+                time.sleep(1)
             if response is not None and response != b'':
                 peer: Peer = Peer("", self.info_hash, ip, port)
                 peer_connections[peer] = conn
@@ -147,10 +156,6 @@ class Peer:
 
         threads: list[threading.Thread] = []
         for peer_ip, peer_port in peers_dict.items():
-            if cancel_event.is_set():
-                return {}
-            while pause_event.is_set():
-                time.sleep(1)
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             thread: threading.Thread = threading.Thread(target=perform_handshake_wrapper, args=(
                 peer_ip,
@@ -265,8 +270,9 @@ class Peer:
         _endgame_found_block: threading.Event = threading.Event()
 
         pieces_downloaded = 0
-        size_of_download = 0
         start_time = time.time()
+
+        global SIZE_OF_DOWNLOAD
 
         # UNIFORMS ALL FILES, ALLOWING FOR GENERAL HANDLING
         if 'files' not in torrent_info.keys():
@@ -287,6 +293,7 @@ class Peer:
                 # region SELECT PIECE
                 acquire_piece_lock.acquire()
                 if cancel_event.is_set():
+                    acquire_piece_lock.release()
                     return
                 while pause_event.is_set():
                     time.sleep(1)
@@ -341,7 +348,7 @@ class Peer:
                         need_to_send = True
                         match response_id:
                             case Bittorrent_Constants.PIECE:
-                                data: bytes = self.recv_all(conn, len_prefix - 1)
+                                data: bytes = self.recv_all(conn, len_prefix - 1, cancel_event)
                                 response_index, response_offset = struct.unpack(">II", data[:8])
                                 try:
                                     assert response_index == piece_index
@@ -398,7 +405,7 @@ class Peer:
         def download_process(conn):
             nonlocal files
             nonlocal pieces_downloaded
-            nonlocal size_of_download
+            global SIZE_OF_DOWNLOAD
 
             for file in files:
                 with open(file['path'], 'w') as _:  # CREATE EMPTY FILE(S)
@@ -410,7 +417,7 @@ class Peer:
                 while pause_event.is_set():
                     time.sleep(1)
 
-                actual_piece_size: int = min(piece_length, size - size_of_download)
+                actual_piece_size: int = min(piece_length, size - SIZE_OF_DOWNLOAD)
                 download_percent: float = round((pieces_downloaded / num_pieces) * 100, 2)
                 try:
                     update(download_percent, "Downloading from peers...", time.time() - start_time)  # UPDATE GUI
@@ -425,7 +432,7 @@ class Peer:
                 piece_offset: int = piece_index * piece_length
                 remaining_data: bytes = piece_data
                 write_data_lock.acquire()
-                size_of_download += len(piece_data)
+                SIZE_OF_DOWNLOAD += len(piece_data)
                 write_data_lock.release()
 
                 for file in files:  # FILE SELECTION
@@ -492,7 +499,7 @@ class Peer:
                     need_to_send = True
                     match response_id:
                         case Bittorrent_Constants.PIECE:
-                            data: bytes = self.recv_all(conn, len_prefix - 1)
+                            data: bytes = self.recv_all(conn, len_prefix - 1, cancel_event)
                             response_index, response_offset = struct.unpack(">II", data[:8])
                             try:
                                 assert response_index == piece_index
@@ -525,11 +532,11 @@ class Peer:
                 pass
 
         def write_individual_piece(piece_index, piece_data):
-            nonlocal size_of_download
+            global SIZE_OF_DOWNLOAD
             piece_offset: int = piece_index * piece_length
             remaining_data: bytes = piece_data
             write_data_lock.acquire()
-            size_of_download += len(remaining_data)
+            SIZE_OF_DOWNLOAD += len(remaining_data)
             write_data_lock.release()
 
             for file in files:  # FILE SELECTION
@@ -565,7 +572,7 @@ class Peer:
         missing_pieces: list[Index] = [p for p in piece_statuses if p.status == "Absent" or p.status == "Downloading"]
         for p in missing_pieces:
             piece: bytes = b''
-            real_piece_size: int = min(piece_length, size - size_of_download)
+            real_piece_size: int = min(piece_length, size - SIZE_OF_DOWNLOAD)
             download_percentage: float = round((pieces_downloaded / num_pieces) * 100, 2)
             try:
                 update(download_percentage, "Endgame... Have faith, the bar freezing doesn't mean anything",
