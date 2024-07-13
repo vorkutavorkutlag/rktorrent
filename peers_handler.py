@@ -142,6 +142,10 @@ class Peer:
 
         def perform_handshake_wrapper(ip: str, port: int, conn: socket.socket) -> None:
             response = self.handshake(ip, port, conn)
+            if cancel_event.is_set():
+                return
+            while pause_event.is_set():
+                time.sleep(1)
             lock.acquire()
             if cancel_event.is_set():
                 return

@@ -9,6 +9,8 @@ from tkinter import filedialog, ttk, messagebox
 
 import main
 
+ACTIVE_DOWNLOADS = []
+
 
 def upload_file():
     file_path = filedialog.askopenfilename(filetypes=[("Torrent files", "*.torrent")])
@@ -102,16 +104,19 @@ def select_directory_and_download(file_path, edit_button, download_button, delet
 
 def start_download_threaded(save_directory, file_path, edit_button, download_button, delete_button) -> None:
     # Create a thread for download operation
+    cancel_event = threading.Event()
     download_thread = threading.Thread(target=start_download, args=(
         save_directory,
         file_path,
         edit_button,
         download_button,
-        delete_button))
+        delete_button,
+        cancel_event))
     download_thread.start()
+    ACTIVE_DOWNLOADS.append((download_thread, cancel_event))
 
 
-def start_download(save_directory, file_path, edit_button, download_button, delete_button) -> None:
+def start_download(save_directory, file_path, edit_button, download_button, delete_button, cancel_event) -> None:
     # HIDES BUTTONS
     edit_button.pack_forget()
     download_button.pack_forget()
@@ -126,7 +131,6 @@ def start_download(save_directory, file_path, edit_button, download_button, dele
 
     # CREATES CANCEL BUTTON
     pause_event = threading.Event()
-    cancel_event = threading.Event()
 
     def pause_download():
         pause_event.set()
@@ -135,6 +139,7 @@ def start_download(save_directory, file_path, edit_button, download_button, dele
         pause_event.clear()
 
     def cancel_download():
+        messagebox.showinfo("Info", "Be patient as we close down the connections.")
         cancel_event.set()
         progress_bar.destroy()
         control_frame.destroy()
@@ -195,12 +200,13 @@ def start_download(save_directory, file_path, edit_button, download_button, dele
             except OSError:
                 print("Error occurred while deleting files.")
         else:
-            cancel_download()      # REMOVES UI
+            progress_bar.destroy()
+            control_frame.destroy()      # REMOVES UI
             if exit_code == 0:
                 messagebox.showinfo("Info", "Torrent content successfully installed")
             else:
                 messagebox.showinfo("Info", "Unexpected error occurred while downloading")
-
+        ACTIVE_DOWNLOADS.remove((threading.current_thread(), cancel_event))
 
         # SHOW THE BUTTONS AGAIN
         edit_button.pack(side='right', padx=5)
@@ -215,10 +221,18 @@ def delete_file_frame(file_frame):
     file_frame.destroy()
 
 
+def on_closing():
+    if ACTIVE_DOWNLOADS:
+        messagebox.showwarning("Warning",
+                            "Please wait for all downloads to complete or cancel them before closing the application.")
+    else:
+        root.destroy()
+
+
 if __name__ == '__main__':
     # CREATE MAIN WINDOW
     root = tk.Tk()
-    root.title("RK-Torrent    -       Don't close window without cancelling!")  # Set the title to "RK-Torrent"
+    root.title("RK-Torrent")  # Set the title to "RK-Torrent"
 
     window_width = 1300
     window_height = 650
@@ -241,6 +255,9 @@ if __name__ == '__main__':
     # CREATE FRAME FOR CONTENT
     content_frame = tk.Frame(root)
     content_frame.pack(fill='both', expand=True, padx=10)
+
+    # OVERRIDES CLOSING WINDOW
+    root.protocol("WM_DELETE_WINDOW", on_closing)
 
     # RUN LOOP
     root.mainloop()
