@@ -7,6 +7,8 @@ from hashlib import sha1
 from typing import Callable
 from math import ceil
 
+import bcoding
+
 
 class Bittorrent_Constants:
     CHOKE = 0
@@ -172,7 +174,6 @@ class Peer:
 
         return peer_connections
 
-
     def send_all_interested(self, available_peers: dict['Peer', socket.socket]) -> None:
         response_length: int = 5  # 4 - length, 1 - ID
 
@@ -243,7 +244,7 @@ class Peer:
         sorted_indexes: list[int] = sorted(range(len(bitfield_counter_map)), key=lambda x: bitfield_counter_map[x])
         piece_statuses: list[Index] = list(Index(ind) for ind in sorted_indexes)
 
-        endgame_enabled: bool = len(available_peers) > 5       # WITH LOW PEER AMOUNTS, ENDGAME CAN HARM THE PROCESS
+        endgame_enabled: bool = len(available_peers) > 5  # WITH LOW PEER AMOUNTS, ENDGAME CAN HARM THE PROCESS
 
         acquire_piece_lock: threading.Lock = threading.Lock()
         write_data_lock: threading.Lock = threading.Lock()
@@ -287,7 +288,7 @@ class Peer:
                         piece_index = index.value
                         index_of_index = ioi
                         break
-                if piece_index == -1:           # DIDN'T FIND AVAILABLE PIECE. THREAD IS KILLED
+                if piece_index == -1:  # DIDN'T FIND AVAILABLE PIECE. THREAD IS KILLED
                     acquire_piece_lock.release()
                     return
 
@@ -425,7 +426,7 @@ class Peer:
 
                     bytes_to_write = min(file['length'] - piece_offset, len(remaining_data))
                     write_data_lock.acquire()
-                    with open(file['path'], 'r+b') as f:        # WRITE TO FILE
+                    with open(file['path'], 'r+b') as f:  # WRITE TO FILE
                         f.seek(piece_offset)
                         f.write(remaining_data[:bytes_to_write])
                     write_data_lock.release()
@@ -439,7 +440,7 @@ class Peer:
             conns: dict.values = available_peers.values()
             length_prefix: int = 0
             keep_alive: bytes = struct.pack(">I", length_prefix)
-            while not (pieces_downloaded / num_pieces) * 100 > 90:      # STOPS AT ENDGAME
+            while not (pieces_downloaded / num_pieces) * 100 > 90:  # STOPS AT ENDGAME
                 if cancel_event.is_set():
                     return
                 if not pause_event.is_set():
@@ -530,12 +531,12 @@ class Peer:
 
                 bytes_to_write = min(file_length - piece_offset, len(remaining_data))
                 write_data_lock.acquire()
-                with open(file['path'], 'r+b') as f:           # WRITES TO FILE
+                with open(file['path'], 'r+b') as f:  # WRITES TO FILE
                     f.seek(piece_offset)
                     f.write(remaining_data[:bytes_to_write])
                 write_data_lock.release()
                 remaining_data = remaining_data[bytes_to_write:]
-                piece_offset = 0                               # RESET OFFSET FOR SUBSEQUENT FILE(S)
+                piece_offset = 0  # RESET OFFSET FOR SUBSEQUENT FILE(S)
 
                 if not remaining_data:
                     break
@@ -559,11 +560,11 @@ class Peer:
             download_percentage: float = round((pieces_downloaded / num_pieces) * 100, 2)
             try:
                 update(download_percentage, "Endgame... Have faith, the bar freezing doesn't mean anything",
-                                            time.time() - start_time)
+                       time.time() - start_time)
             except Exception as e:  # TKINTER EXCEPTION
                 return e
 
-            while True:                                  # RUNS UNTIL PIECE IS VERIFIED
+            while True:  # RUNS UNTIL PIECE IS VERIFIED
                 endgame_threads: list[threading.Thread] = []
                 offset: int = 0
 
@@ -577,10 +578,10 @@ class Peer:
                     block_data: bytes = b''
                     for peer in available_peers.keys():
                         thread: threading.Thread = threading.Thread(target=_endgame_request_block, args=[p.value,
-                                                                                                       peer,
-                                                                                                       real_piece_size,
-                                                                                                       len(piece),
-                                                                                                       offset])
+                                                                                                         peer,
+                                                                                                         real_piece_size,
+                                                                                                         len(piece),
+                                                                                                         offset])
                         endgame_threads.append(thread)
                         thread.start()
                     for thread in endgame_threads:

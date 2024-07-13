@@ -16,7 +16,7 @@ import tracker_handler
 MAX_PEERS = 60
 exit_code = 0
 
-version: str = "0102"
+version: str = "0110"
 IP_ADDRESS: str = get('https://api.ipify.org').content.decode('utf8')
 client_prefix = "RK-" + version + "-"
 random_suffix = uuid4().hex[:12]
@@ -76,28 +76,6 @@ def run(selected_dir: str, selected_torrent: str,
     return exit_code
 
 
-def tracker_comm(tracker: tracker_handler.Tracker, cancel_event: threading.Event):
-    while True:
-        try:
-            if cancel_event.is_set():
-                tracker.close_gracefully()
-                return
-            for _ in range(floor(tracker.interval/5)):      # 5 = Number of seconds we are willing to wait.
-                if cancel_event.is_set():
-                    tracker.close_gracefully()
-                    return
-                tracker.downloaded = peers_handler.SIZE_OF_DOWNLOAD
-                if tracker.downloaded == tracker.size:
-                    tracker.finish_comm()
-                    return
-                time.sleep(5)
-            tracker.inform_tracker_download()
-        except (requests.exceptions.InvalidSchema, requests.exceptions.HTTPError, TimeoutError):
-            return
-
-
-
-
 def run_continuation(selected_dir: str, info_hash: bytes, peers_dict: dict, num_pieces: int, piece_length: int,
                      size: int, torrent_info: dict, cancel_event: threading.Event, pause_event: threading.Event,
                      update: Callable, client_uuid: str):
@@ -113,12 +91,16 @@ def run_continuation(selected_dir: str, info_hash: bytes, peers_dict: dict, num_
     client_peer: peers_handler.Peer = peers_handler.Peer(client_uuid, info_hash, "localhost", 0)
     peer_connections: dict[peers_handler.Peer, socket.socket] = {}
 
+    time_started = time.time()
     while peer_connections == {}:
         if cancel_event.is_set():
             exit_code = 0
             return
         while pause_event.is_set():
             time.sleep(1)
+        if time.time() - time_started > 30:
+            exit_code = -1
+            return
         peer_connections: dict[peers_handler.Peer, socket.socket] = client_peer.perform_handshakes(peers_dict,
                             cancel_event=cancel_event, pause_event=pause_event)
         time.sleep(1)
@@ -150,3 +132,23 @@ def run_continuation(selected_dir: str, info_hash: bytes, peers_dict: dict, num_
     except Exception as e:
         exit_code = int(repr(e))
         return
+
+
+def tracker_comm(tracker: tracker_handler.Tracker, cancel_event: threading.Event):
+    while True:
+        try:
+            if cancel_event.is_set():
+                tracker.close_gracefully()
+                return
+            for _ in range(floor(tracker.interval/5)):      # 5 = Number of seconds we are willing to wait.
+                if cancel_event.is_set():
+                    tracker.close_gracefully()
+                    return
+                tracker.downloaded = peers_handler.SIZE_OF_DOWNLOAD
+                if tracker.downloaded == tracker.size:
+                    tracker.finish_comm()
+                    return
+                time.sleep(5)
+            tracker.inform_tracker_download()
+        except (requests.exceptions.InvalidSchema, requests.exceptions.HTTPError, TimeoutError):
+            return
