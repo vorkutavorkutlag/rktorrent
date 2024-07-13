@@ -597,9 +597,8 @@ class Peer:
 
                     piece += block_data
                     offset += len(block_data)
-                    print(piece)
-                print(f"validating piece #{p.value}")
+                print(f"Validating piece #{p.value}")
                 if self.validate_piece(piece, p.value, torrent_info['pieces']):
                     write_individual_piece(p.value, piece)
+                    pieces_downloaded += 1
                     break
-                print("you're going to be okay.")

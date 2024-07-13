@@ -205,7 +205,7 @@ def delete_file_frame(file_frame):
 
 
 if __name__ == '__main__':
-    version: str = "0100"
+    version: str = "0101"
     IP_ADDRESS: str = get('https://api.ipify.org').content.decode('utf8')
     client_prefix = "RK-" + version + "-"
     random_suffix = uuid4().hex[:12]
