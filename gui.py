@@ -9,25 +9,25 @@ from requests import get
 from uuid import uuid4
 from tkinter import filedialog, ttk, messagebox
 
-import main  # Import the main module
+import main
 
 
 def upload_file():
     file_path = filedialog.askopenfilename(filetypes=[("Torrent files", "*.torrent")])
     if file_path:
-        # Create a new frame to hold the label and buttons
+        # NEW FRAME FOR LABEL AND BUTTONS
         file_frame = tk.Frame(content_frame)
         file_frame.pack(fill='x', padx=10, pady=2)
 
-        # Create a label to display the file path
-        new_label = tk.Label(file_frame, text=f"File uploaded: {file_path}", anchor="w")
-        new_label.pack(side='left', fill='x', expand=True)
+        # FILE PATH
+        file_path_label = tk.Label(file_frame, text=f"File uploaded: {file_path}", anchor="w")
+        file_path_label.pack(side='left', fill='x', expand=True)
 
-        # Create "🖊️" button
+        # "🖊️" BUTTON
         edit_button = tk.Button(file_frame, text="🖊️", command=lambda: open_edit_window(file_path))
         edit_button.pack(side='right', padx=5)
 
-        # Create "📥" button
+        # "📥" BUTTON
         download_button = tk.Button(file_frame, text="📥",
                                     command=lambda: select_directory_and_download(file_path, edit_button,
                                                                                   download_button, delete_button))
@@ -38,12 +38,12 @@ def upload_file():
         delete_button.pack(side='right')
 
 
-def open_edit_window(file_path):
-    def apply_changes():
+def open_edit_window(file_path) -> None:
+    def apply_changes() -> None:
         try:
-            updated_content = json.loads(text_area.get("1.0", tk.END))
+            updated_content: json.loads = json.loads(text_area.get("1.0", tk.END))
             if 'info' in updated_content and 'pieces' in updated_content['info']:
-                # Convert pieces to string and then encode as bytes
+                # CHANGE PIECES BACK TO HASH BYTES
                 updated_content['info']['pieces'] = base64.b64decode(updated_content['info']['pieces'])
             with open(file_path, 'wb') as selected_file:
                 selected_file.write(bcoding.bencode(updated_content))
@@ -51,43 +51,43 @@ def open_edit_window(file_path):
         except Exception as ex:
             messagebox.showerror("Error", f"Failed to save changes: {ex}")
 
-    # Create a new top-level window for editing
+    # CREATES EDITING WINDOW
     edit_window = tk.Toplevel(root)
     edit_window.title("Edit File")
 
-    # Adjust size of the edit window
+    # ADJUSTS SIZE OF WINDOW
     edit_window.geometry("700x500")  # Adjusted dimensions to fit buttons comfortably
 
-    # Create a text area for editing
+    # CREATES AREA FOR THE TEXT
     text_area = tk.Text(edit_window, wrap='word')
     text_area.pack(fill='both', expand=True, padx=10, pady=10)
 
     try:
-        # Load the content of the file, decode it, and insert it as JSON
+        # LOADS CONTENT AND INSERTS INTO JSON
         with open(file_path, 'rb') as file:
             bencoded_content = file.read()
             decoded_content = bcoding.bdecode(bencoded_content)
             if 'info' in decoded_content and 'pieces' in decoded_content['info']:
-                # Convert pieces to string for editing
+                # ENCODES PIECES IN BASE64 SO IT COULD BE VIEWED IN EDITOR
                 decoded_content['info']['pieces'] = base64.b64encode(decoded_content['info']['pieces']).decode('utf-8')
             text_area.insert(tk.END, json.dumps(decoded_content, indent=4))
     except Exception as e:
         messagebox.showerror("Error", f"Failed to load file: {e}")
 
-    # Create a frame for buttons
+    # CREATES FRAME FOR BUTTONS
     button_frame = tk.Frame(edit_window)
     button_frame.pack(fill='x', padx=10, pady=5)
 
-    # Create "Apply" button
+    # CREATES APPLY BUTTON
     apply_button = tk.Button(button_frame, text="Apply", command=apply_changes)
     apply_button.pack(side='left', padx=5)
 
-    # Create "OK" button (non-functional)
+    # CREATES OK BUTTON
     ok_button = tk.Button(button_frame, text="OK", command=lambda: edit_window.destroy())
     ok_button.pack(side='left', padx=5)
 
 
-def select_directory_and_download(file_path, edit_button, download_button, delete_button):
+def select_directory_and_download(file_path, edit_button, download_button, delete_button) -> None:
     while True:
         # Ask user to select directory
         save_directory = filedialog.askdirectory()
@@ -96,34 +96,37 @@ def select_directory_and_download(file_path, edit_button, download_button, delet
 
         # Check if the directory is empty
         if not os.listdir(save_directory):
-            print(f"Selected directory: {save_directory}")
             start_download_threaded(save_directory, file_path, edit_button, download_button, delete_button)
             break
         else:
             messagebox.showwarning("Warning", "Please select an empty directory.")
 
 
-def start_download_threaded(save_directory, file_path, edit_button, download_button, delete_button):
+def start_download_threaded(save_directory, file_path, edit_button, download_button, delete_button) -> None:
     # Create a thread for download operation
-    download_thread = threading.Thread(target=start_download,
-                                       args=(save_directory, file_path, edit_button, download_button, delete_button))
+    download_thread = threading.Thread(target=start_download, args=(
+        save_directory,
+        file_path,
+        edit_button,
+        download_button,
+        delete_button))
     download_thread.start()
 
 
-def start_download(save_directory, file_path, edit_button, download_button, delete_button):
-    # Hide the Edit, Download, and Delete buttons
+def start_download(save_directory, file_path, edit_button, download_button, delete_button) -> None:
+    # HIDES BUTTONS
     edit_button.pack_forget()
     download_button.pack_forget()
     delete_button.pack_forget()
 
-    # Create a frame for download controls
+    # CREATES FRAME FOR DOWNLOAD CONTROLS
     control_frame = tk.Frame(content_frame)
     control_frame.pack(fill='x', padx=10, pady=5)
 
     state_label = tk.Label(control_frame, text="Collecting peers...", anchor="w")
     state_label.pack(side='left', padx=5)
 
-    # Create "Cancel" button
+    # CREATES CANCEL BUTTON
     pause_event = threading.Event()
     cancel_event = threading.Event()
 
@@ -147,7 +150,7 @@ def start_download(save_directory, file_path, edit_button, download_button, dele
     cancel_button = tk.Button(control_frame, text="Cancel", command=cancel_download)
     cancel_button.pack(side='left', padx=5)
 
-    # Create a progress bar
+    # CREATES PROGRESS BAR
     progress_bar = ttk.Progressbar(content_frame, orient='horizontal')
     progress_bar.pack(fill='x', padx=10, pady=5)
     percentage_label = tk.Label(control_frame, text="0%")
@@ -157,7 +160,7 @@ def start_download(save_directory, file_path, edit_button, download_button, dele
     estimated_time_left = tk.Label(control_frame, text="Estimated Time left: 0 seconds")
     estimated_time_left.pack(pady=10)
 
-    def chop_microseconds(delta):
+    def chop_microseconds(delta: timedelta) -> timedelta:
         return delta - timedelta(microseconds=delta.microseconds)
 
     def update(percent_value: int, state: str, time_elapsed: int):
@@ -166,14 +169,24 @@ def start_download(save_directory, file_path, edit_button, download_button, dele
         percentage_label.config(text=f"{percent_value}%")
         state_label.config(text=f"{state}")
         time_elapsed_label.config(text=f"Elapsed Time: {chop_microseconds(timedelta(seconds=time_elapsed))}")
-        estimated_time_left_calc = chop_microseconds(timedelta(seconds=
-                                                            ((100 - percent_value)*time_elapsed)/(percent_value+0.1)))
+        estimated_time_left_calc = chop_microseconds(timedelta(
+            seconds=((100 - percent_value)*time_elapsed)/(percent_value+0.1)))
+        # IF THE DOWNLOAD SPEED IS CONSTANT, DELTA OF DATA DOWNLOADED DIVIDED BY DELTA OF TIME IS EQUAL.
+        # MAKING THE DELTA OF TIME LEFT THE SUBJECT, WE CAN CALCULATE IT BY DELTA DATA LEFT TIMES DELTA TIME ELAPSED
+        # DIVIDED BY DELTA DATA DOWNLOADED
         estimated_time_left.config(text=f"Estimated Time left: {estimated_time_left_calc}")
 
 
     try:
         # RUN TORRENT DOWNLOAD IN A THREAD
-        main.run(save_directory, file_path, cancel_event, pause_event, update, IP_ADDRESS, UNIQUE_CLIENT_ID)
+        exit_code: int = main.run(
+                                save_directory,
+                                file_path,
+                                cancel_event,
+                                pause_event,
+                                update,
+                                IP_ADDRESS,
+                                UNIQUE_CLIENT_ID)
 
         if cancel_event.is_set():
             try:
@@ -186,12 +199,14 @@ def start_download(save_directory, file_path, edit_button, download_button, dele
             except OSError:
                 print("Error occurred while deleting files.")
         else:
-            cancel_download()
-            messagebox.showinfo("Info", "Torrent content successfully installed")
-        # Cleanup after download completes or is cancelled
+            cancel_download()      # REMOVES UI
+            if exit_code == 0:
+                messagebox.showinfo("Info", "Torrent content successfully installed")
+            else:
+                messagebox.showinfo("Info", "Unexpected error occurred while downloading")
 
 
-        # Show back the Edit and Download buttons
+        # SHOW THE BUTTONS AGAIN
         edit_button.pack(side='right', padx=5)
         download_button.pack(side='right')
         delete_button.pack(side='right')
@@ -205,7 +220,7 @@ def delete_file_frame(file_frame):
 
 
 if __name__ == '__main__':
-    version: str = "0101"
+    version: str = "0102"
     IP_ADDRESS: str = get('https://api.ipify.org').content.decode('utf8')
     client_prefix = "RK-" + version + "-"
     random_suffix = uuid4().hex[:12]
