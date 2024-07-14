@@ -7,10 +7,8 @@ from hashlib import sha1
 from typing import Callable
 from math import ceil
 
-import bcoding
 
-
-class Bittorrent_Constants:
+class BITTORRENT_CONSTANTS:
     CHOKE = 0
     UNCHOKE = 1
     INTERESTED = 2
@@ -66,21 +64,21 @@ class Peer:
     @staticmethod
     def send_interested(sock: socket.socket) -> None:
         length_prefix: int = 1
-        message_id: int = Bittorrent_Constants.INTERESTED
+        message_id: int = BITTORRENT_CONSTANTS.INTERESTED
         message: bytes = struct.pack(">IB", length_prefix, message_id)
         sock.sendall(message)
 
     @staticmethod
     def send_request(sock: socket.socket, piece_index: int, begin: int, length: int) -> None:
         length_prefix: int = 1 + 4 + 4 + 4  # 1 BYTE ID, 4 BYTE PIECE INDEX, 4 BYTE OFFSET, 4 BYTE LENGTH
-        message_id: int = Bittorrent_Constants.REQUEST
+        message_id: int = BITTORRENT_CONSTANTS.REQUEST
         message: bytes = struct.pack('>IBIII', length_prefix, message_id, piece_index, begin, length)
         sock.sendall(message)
 
     @staticmethod
     def send_cancel(sock: socket.socket, piece_index: int, begin: int, length: int) -> None:
         length_prefix: int = 1 + 4 + 4 + 4  # 1 BYTE ID, 4 BYTE PIECE INDEX, 4 BYTE OFFSET, 4 BYTE LENGTH
-        message_id: int = Bittorrent_Constants.CANCEL
+        message_id: int = BITTORRENT_CONSTANTS.CANCEL
         message: bytes = struct.pack('>IBIII', length_prefix, message_id, piece_index, begin, length)
         sock.sendall(message)
 
@@ -186,12 +184,12 @@ class Peer:
                 response_id: int = response[4]
 
                 match response_id:
-                    case Bittorrent_Constants.CHOKE:
+                    case BITTORRENT_CONSTANTS.CHOKE:
                         target_peer.choking = True
-                    case Bittorrent_Constants.UNCHOKE:
+                    case BITTORRENT_CONSTANTS.UNCHOKE:
                         target_peer.choking = False
 
-                    case Bittorrent_Constants.BITFIELD:
+                    case BITTORRENT_CONSTANTS.BITFIELD:
                         bitfield: bytes = conn.recv(length - 1)
                         bitfield_str: str = ''.join(format(byte, '08b') for byte in bitfield)
                         target_peer.bitfield = bytearray(int(byte) for byte in bitfield_str)
@@ -224,9 +222,9 @@ class Peer:
             basic_header: bytes = sock.recv(basic_header_len)
             response_length, response_id = struct.unpack(">IB", basic_header)
             match response_id:
-                case Bittorrent_Constants.UNCHOKE:
+                case BITTORRENT_CONSTANTS.UNCHOKE:
                     return 1
-                case Bittorrent_Constants.BITFIELD:
+                case BITTORRENT_CONSTANTS.BITFIELD:
                     data: bytes = sock.recv(response_length - 1)
                     bitfield_str: str = ''.join(format(byte, '08b') for byte in data)
                     target_peer.bitfield = bytearray(int(byte) for byte in bitfield_str)
@@ -310,7 +308,7 @@ class Peer:
                             time.sleep(1)
 
                         if need_to_send:
-                            requesting_block_length = min(Bittorrent_Constants.BLOCK_LENGTH,
+                            requesting_block_length = min(BITTORRENT_CONSTANTS.BLOCK_LENGTH,
                                                           piece_size - len(piece_data))
                             self.send_request(conn,
                                               piece_index,
@@ -328,7 +326,7 @@ class Peer:
                         response_id: int = int.from_bytes(conn.recv(1), byteorder="big")
                         need_to_send = True
                         match response_id:
-                            case Bittorrent_Constants.PIECE:
+                            case BITTORRENT_CONSTANTS.PIECE:
                                 data: bytes = self.recv_all(conn, len_prefix - 1, cancel_event)
                                 response_index, response_offset = struct.unpack(">II", data[:8])
                                 try:
@@ -341,15 +339,15 @@ class Peer:
                                     continue
                                 block = data[8:]
                                 piece_data += block
-                                begin_offset += Bittorrent_Constants.BLOCK_LENGTH
-                            case Bittorrent_Constants.CHOKE:
+                                begin_offset += BITTORRENT_CONSTANTS.BLOCK_LENGTH
+                            case BITTORRENT_CONSTANTS.CHOKE:
                                 if not self.await_unchoke(conn, target_peer, cancel_event, pause_event, piece_index,
                                                           begin_offset, piece_size):
                                     return
-                            case Bittorrent_Constants.HAVE:
+                            case BITTORRENT_CONSTANTS.HAVE:
                                 new_index: int = int.from_bytes(conn.recv(len_prefix - 1), byteorder="big")
                                 target_peer.bitfield[new_index] = 1
-                            case Bittorrent_Constants.UNCHOKE:
+                            case BITTORRENT_CONSTANTS.UNCHOKE:
                                 need_to_send = False
                                 continue
 
@@ -455,7 +453,7 @@ class Peer:
 
         def _endgame_request_block(piece_index: int, target_peer: Peer,
                                    piece_size: int, downloaded_len: int, begin_offset: int) -> None:
-            requesting_block_length: int = min(Bittorrent_Constants.BLOCK_LENGTH, piece_size - downloaded_len)
+            requesting_block_length: int = min(BITTORRENT_CONSTANTS.BLOCK_LENGTH, piece_size - downloaded_len)
             conn: socket.socket = available_peers[target_peer]
             need_to_send: bool = True
             len_prefix_len: int = 4
@@ -482,7 +480,7 @@ class Peer:
                     response_id = int.from_bytes(conn.recv(1), byteorder="big")
                     need_to_send = True
                     match response_id:
-                        case Bittorrent_Constants.PIECE:
+                        case BITTORRENT_CONSTANTS.PIECE:
                             data: bytes = self.recv_all(conn, len_prefix - 1, cancel_event)
                             response_index, response_offset = struct.unpack(">II", data[:8])
                             try:
@@ -497,15 +495,15 @@ class Peer:
                             write_data_lock.release()
                             return
 
-                        case Bittorrent_Constants.CHOKE:
+                        case BITTORRENT_CONSTANTS.CHOKE:
                             if not self.await_unchoke(conn, target_peer, cancel_event, pause_event, piece_index,
                                                       begin_offset, piece_size):
                                 return
                             need_to_send = True
-                        case Bittorrent_Constants.HAVE:
+                        case BITTORRENT_CONSTANTS.HAVE:
                             new_index: int = int.from_bytes(conn.recv(len_prefix - 1), byteorder="big")
                             target_peer.bitfield[new_index] = 1
-                        case Bittorrent_Constants.UNCHOKE:
+                        case BITTORRENT_CONSTANTS.UNCHOKE:
                             need_to_send = False
                             continue
                 except (TimeoutError, ConnectionResetError, ConnectionError, IndexError):
@@ -568,7 +566,7 @@ class Peer:
                 endgame_threads: list[threading.Thread] = []
                 offset: int = 0
 
-                for num_block in range(ceil(real_piece_size / Bittorrent_Constants.BLOCK_LENGTH)):
+                for num_block in range(ceil(real_piece_size / BITTORRENT_CONSTANTS.BLOCK_LENGTH)):
                     if cancel_event.is_set():
                         return
                     while pause_event.is_set():
@@ -578,10 +576,10 @@ class Peer:
                     block_data: bytes = b''
                     for peer in available_peers.keys():
                         thread: threading.Thread = threading.Thread(target=_endgame_request_block, args=[p.value,
-                                                                                                         peer,
-                                                                                                         real_piece_size,
-                                                                                                         len(piece),
-                                                                                                         offset])
+                                                                                                     peer,
+                                                                                                     real_piece_size,
+                                                                                                     len(piece),
+                                                                                                     offset])
                         endgame_threads.append(thread)
                         thread.start()
                     for thread in endgame_threads:
@@ -593,3 +591,7 @@ class Peer:
                     write_individual_piece(p.value, piece)
                     pieces_downloaded += 1
                     break
+
+        # CLOSING CONNECTIONS
+        for _, sock in available_peers.items():
+            sock.close()

@@ -259,5 +259,9 @@ if __name__ == '__main__':
     # OVERRIDES CLOSING WINDOW
     root.protocol("WM_DELETE_WINDOW", on_closing)
 
+    #
+    logo = tk.PhotoImage(file="client_logo.png")
+    root.iconphoto(False, logo)
+
     # RUN LOOP
     root.mainloop()

@@ -16,7 +16,7 @@ import tracker_handler
 MAX_PEERS = 60
 exit_code = 0
 
-version: str = "0110"
+version: str = "0111"
 IP_ADDRESS: str = get('https://api.ipify.org').content.decode('utf8')
 client_prefix = "RK-" + version + "-"
 random_suffix = uuid4().hex[:12]
@@ -130,7 +130,7 @@ def run_continuation(selected_dir: str, info_hash: bytes, peers_dict: dict, num_
         exit_code = 0
         return
     except Exception as e:
-        exit_code = int(repr(e))
+        exit_code = sum(ord(char) for char in repr(e))
         return
 
 
