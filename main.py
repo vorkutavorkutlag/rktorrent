@@ -140,6 +140,7 @@ def tracker_comm(tracker: tracker_handler.Tracker, cancel_event: threading.Event
             if cancel_event.is_set():
                 tracker.close_gracefully()
                 return
+
             for _ in range(floor(tracker.interval/5)):      # 5 = Number of seconds we are willing to wait.
                 if cancel_event.is_set():
                     tracker.close_gracefully()

@@ -235,7 +235,7 @@ class Peer:
                     return 2
 
     def download_process(self, num_pieces: int, piece_length: int, available_peers: dict['Peer', socket.socket],
-                         torrent_info: dict, selected_dir: str, size: int,
+                         torrent_info: dict, selected_dir: str, torrent_content_size: int,
                          cancel_event: threading.Event, pause_event: threading.Event, update: Callable):
         # ASCENDING ORDER LIST OF INDEXES, ALLOWS FOR RAREST PIECE SELECTION
         bitfield_counter_map: list[int] = self.bitfield_counter_map(list(available_peers.keys()), num_pieces)
@@ -399,13 +399,7 @@ class Peer:
                 while pause_event.is_set():
                     time.sleep(1)
 
-                actual_piece_size: int = min(piece_length, size - SIZE_OF_DOWNLOAD)
-                download_percent: float = round((pieces_downloaded / num_pieces) * 100, 2)
-                try:
-                    update(download_percent, "Downloading from peers...", time.time() - start_time)  # UPDATE GUI
-                except Exception as ex:  # TKINTER EXCEPTION
-                    return ex
-
+                actual_piece_size: int = min(piece_length, torrent_content_size - SIZE_OF_DOWNLOAD)
                 try:
                     piece_index, piece_data = download_rarest_piece(conn, actual_piece_size)
                 except TypeError:  # RETURNING NONE = NO MORE PIECES TO DOWNLOAD TILL ENDGAME
@@ -539,14 +533,36 @@ class Peer:
                 if not remaining_data:
                     break
 
+        def update_gui():
+            while True:
+                if cancel_event.is_set() or SIZE_OF_DOWNLOAD == torrent_content_size:
+                    return
+                while pause_event.is_set():
+                    time.sleep(1)
+
+                try:
+                    download_perc: float = round((pieces_downloaded / num_pieces) * 100, 2)
+                    if download_perc > 99.5:
+                        update(download_perc, "Endgame... Have faith, the bar freezing doesn't mean anything",
+                               time.time() - start_time)
+                    else:
+                        update(download_perc, "Downloading from peers...", time.time() - start_time)
+                    time.sleep(1)
+
+                except Exception as exc:   # TKINTER EXCEPTION
+                    return exc
+
         downloader_threads: list[threading.Thread] = []
         for sock in available_peers.values():
             thread: threading.Thread = threading.Thread(target=download_process, args=[sock])
             downloader_threads.append(thread)
             thread.start()
         keep_alive_thread: threading.Thread = threading.Thread(target=keep_aliver, args=[])
+        update_gui_thread: threading.Thread = threading.Thread(target=update_gui, args=[])
         downloader_threads.append(keep_alive_thread)
         keep_alive_thread.start()
+        update_gui_thread.start()
+
         for thread in downloader_threads:
             thread.join()
 
@@ -554,14 +570,7 @@ class Peer:
         missing_pieces: list[Index] = [p for p in piece_statuses if p.status == "Absent" or p.status == "Downloading"]
         for p in missing_pieces:
             piece: bytes = b''
-            real_piece_size: int = min(piece_length, size - SIZE_OF_DOWNLOAD)
-            download_percentage: float = round((pieces_downloaded / num_pieces) * 100, 2)
-            try:
-                update(download_percentage, "Endgame... Have faith, the bar freezing doesn't mean anything",
-                       time.time() - start_time)
-            except Exception as e:  # TKINTER EXCEPTION
-                return e
-
+            real_piece_size: int = min(piece_length, torrent_content_size - SIZE_OF_DOWNLOAD)
             while True:  # RUNS UNTIL PIECE IS VERIFIED
                 endgame_threads: list[threading.Thread] = []
                 offset: int = 0
@@ -595,3 +604,4 @@ class Peer:
         # CLOSING CONNECTIONS
         for _, sock in available_peers.items():
             sock.close()
+        update_gui_thread.join()
