@@ -523,7 +523,8 @@ class Peer:
                         case BITTORRENT_CONSTANTS.UNCHOKE:
                             need_to_send = False
                             continue
-                except (TimeoutError, ConnectionResetError, ConnectionError, IndexError, struct.error):
+                except (TimeoutError, ConnectionResetError, ConnectionError,
+                        ValueError, IndexError, OSError, struct.error):
                     return
             try:
                 self.send_cancel(conn, piece_index, begin_offset, requesting_block_length)
