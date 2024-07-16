@@ -69,6 +69,13 @@ class Peer:
         sock.sendall(message)
 
     @staticmethod
+    def send_not_interested(sock: socket.socket) -> None:
+        length_prefix: int = 1
+        message_id: int = BITTORRENT_CONSTANTS.NOT_INTERESTED
+        message: bytes = struct.pack(">IB", length_prefix, message_id)
+        sock.sendall(message)
+
+    @staticmethod
     def send_request(sock: socket.socket, piece_index: int, begin: int, length: int) -> None:
         length_prefix: int = 1 + 4 + 4 + 4  # 1 BYTE ID, 4 BYTE PIECE INDEX, 4 BYTE OFFSET, 4 BYTE LENGTH
         message_id: int = BITTORRENT_CONSTANTS.REQUEST
@@ -303,6 +310,10 @@ class Peer:
                     loop_start_time: time.time = time.time()
                     while len(piece_data) < piece_size:
                         if cancel_event.is_set():
+                            try:
+                                self.send_not_interested(conn)
+                            except socket.error:
+                                pass
                             return
                         while pause_event.is_set():
                             time.sleep(1)
@@ -343,6 +354,7 @@ class Peer:
                             case BITTORRENT_CONSTANTS.CHOKE:
                                 if not self.await_unchoke(conn, target_peer, cancel_event, pause_event, piece_index,
                                                           begin_offset, piece_size):
+                                    self.send_not_interested(conn)
                                     return
                             case BITTORRENT_CONSTANTS.HAVE:
                                 new_index: int = int.from_bytes(conn.recv(len_prefix - 1), byteorder="big")
@@ -395,6 +407,11 @@ class Peer:
 
             while True:
                 if cancel_event.is_set():
+                    for s in available_peers.values():
+                        try:
+                            self.send_not_interested(s)
+                        except socket.error:
+                            pass
                     return
                 while pause_event.is_set():
                     time.sleep(1)
@@ -455,6 +472,11 @@ class Peer:
 
             while not _endgame_found_block.is_set():
                 if cancel_event.is_set():
+                    for s in available_peers.values():
+                        try:
+                            self.send_not_interested(s)
+                        except socket.error:
+                            pass
                     return
                 while pause_event.is_set():
                     time.sleep(1)
@@ -492,6 +514,7 @@ class Peer:
                         case BITTORRENT_CONSTANTS.CHOKE:
                             if not self.await_unchoke(conn, target_peer, cancel_event, pause_event, piece_index,
                                                       begin_offset, piece_size):
+                                self.send_not_interested(conn)
                                 return
                             need_to_send = True
                         case BITTORRENT_CONSTANTS.HAVE:
@@ -577,6 +600,11 @@ class Peer:
 
                 for num_block in range(ceil(real_piece_size / BITTORRENT_CONSTANTS.BLOCK_LENGTH)):
                     if cancel_event.is_set():
+                        for sock in available_peers.values():
+                            try:
+                                self.send_not_interested(sock)
+                            except socket.error:
+                                pass
                         return
                     while pause_event.is_set():
                         time.sleep(1)
@@ -602,6 +630,10 @@ class Peer:
                     break
 
         # CLOSING CONNECTIONS
-        for _, sock in available_peers.items():
+        for sock in available_peers.values():
+            try:
+                self.send_not_interested(sock)
+            except socket.error:
+                pass
             sock.close()
         update_gui_thread.join()

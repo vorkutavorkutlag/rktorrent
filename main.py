@@ -16,7 +16,7 @@ import tracker_handler
 MAX_PEERS = 60
 exit_code = 0
 
-version: str = "0111"
+version: str = "0120"
 IP_ADDRESS: str = get('https://api.ipify.org').content.decode('utf8')
 client_prefix = "RK-" + version + "-"
 random_suffix = uuid4().hex[:12]
