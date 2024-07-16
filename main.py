@@ -44,8 +44,6 @@ def read_torrent(path: str) -> (dict, str, int):  # READS TORRENT FILE, EXTRACTS
         return announce_list, piece_length, hashed_info, size, num_pieces, torrent_json['info']
 
 
-
-
 def run(selected_dir: str, selected_torrent: str,
         cancel_event: threading.Event, pause_event: threading.Event, update: Callable) -> int:
     # CALLS THE READ TORRENT FUNCTION, GETS IMPORTANT INFO
@@ -104,7 +102,6 @@ def run_continuation(selected_dir: str, info_hash: bytes, peers_dict: dict, num_
         peer_connections: dict[peers_handler.Peer, socket.socket] = client_peer.perform_handshakes(peers_dict,
                             cancel_event=cancel_event, pause_event=pause_event)
         time.sleep(1)
-
 
     # MAKES SURE WE ARE CONTACTING MO MORE THAN MAX_PEERS PEERS
     if len(peer_connections) > MAX_PEERS:

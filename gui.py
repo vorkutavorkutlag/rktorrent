@@ -202,10 +202,13 @@ def start_download(save_directory, file_path, edit_button, download_button, dele
         else:
             progress_bar.destroy()
             control_frame.destroy()      # REMOVES UI
-            if exit_code == 0:
-                messagebox.showinfo("Info", "Torrent content successfully installed")
-            else:
-                messagebox.showinfo("Info", "Unexpected error occurred while downloading")
+            match exit_code:
+                case 0:
+                    messagebox.showinfo("Info", "Torrent content successfully installed")
+                case -1:
+                    messagebox.showinfo("Info", "No peers to download from")
+                case _:
+                    messagebox.showinfo("Info", "Unexpected error occurred while downloading")
         ACTIVE_DOWNLOADS.remove((threading.current_thread(), cancel_event))
 
         # SHOW THE BUTTONS AGAIN
